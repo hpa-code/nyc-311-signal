@@ -168,19 +168,16 @@ Register a free Socrata app token for higher rate limits and store it in Secrets
 
 ### Daily collection strategy
 
-Use three complementary passes:
+`created_date` is not a modification timestamp, but the Socrata system field `:updated_at` is: it changes whenever the source republishes a row, including closures of old Requests. Source inspection verified this (see [`docs/source-inspection.md`](docs/source-inspection.md)). Use two passes:
 
 | Pass | Proposed starting policy | Purpose |
 |---|---|---|
-| Recent creation window | Re-fetch requests created in the last 30 days | Capture new records and recent changes |
-| Previously open requests | Re-fetch known open identifiers aged 30–90 days daily, in bounded batches | Discover closures of older requests |
-| Historical reconciliation | Weekly: re-fetch open identifiers older than 90 days and rotate through older date partitions | Detect late corrections, late closures, and changed closed records |
+| Change cursor | Daily: fetch rows with `:updated_at` greater than the last stored cursor minus a small overlap (for example, 6 hours), ordered by `:updated_at, unique_key` | Capture new Requests and every republished change, old or new (about 280,000 rows per day) |
+| Historical reconciliation | Weekly: rotate through older creation-date partitions and compare against current state | Detect changes the cursor missed, such as bulk source reloads or cursor bugs |
 
-The 30-day window, the 90-day split, and the weekly schedule are configuration choices to tune after observing volume and runtime. They do not guarantee capture of every source change.
+Advance the stored cursor only after the pass's files are durably written. The overlap means some rows are fetched twice; payload-hash deduplication absorbs that. If the weekly pass finds changes the cursor missed, alert: it means the cursor assumption has broken.
 
-`created_date` is not a modification timestamp. Do not treat it as a complete incremental-update cursor. Only use a source update field if its availability and meaning have been verified.
-
-Export a versioned list of known-open identifiers from Snowflake to a restricted S3 control prefix after a successful warehouse run. The next ingestion job reads that list, keeping broad Snowflake credentials out of the extractor. Bootstrap it after the historical load. Split very large lists into partitions.
+Record `:created_at` and `:updated_at` in each Observation alongside the payload. `:created_at` is the time the source first published the row, which gives the publication lag directly.
 
 ### File and observation contract
 
@@ -190,7 +187,6 @@ Example object paths:
 raw/311/extract_date=YYYY-MM-DD/run_id=<id>/part-000001.json.gz
 manifests/311/run_id=<id>.json
 checkpoints/311/<partition-id>.json
-control/311/open_ids/publication_id=<id>/part-000001.json.gz
 ```
 
 Wrap each source record with `run_id`, `extracted_at`, `source_dataset`, `schema_version`, and `payload_hash`. Keep the source record under `payload`. Hash a canonical representation of the payload so formatting changes do not appear as record changes.
@@ -241,7 +237,7 @@ Use a database such as `NYC311`, with separate schemas for raw data, cleaned dat
 
 ### Retention
 
-S3 is the replay source and keeps every Observation file; a lifecycle rule moves objects older than 90 days to a cheaper storage class. `RAW.RAW_311_OBSERVATIONS` keeps 90 days. `CLEAN.REQUEST_VERSIONS` stores only changed states, so it stays small even though the daily 30-day re-fetch produces about 320,000 mostly identical Observations per day.
+S3 is the replay source and keeps every Observation file; a lifecycle rule moves objects older than 90 days to a cheaper storage class. `RAW.RAW_311_OBSERVATIONS` keeps 90 days. `CLEAN.REQUEST_VERSIONS` stores only changed states, so it stays small even though the daily change cursor fetches about 280,000 rows per day, many without a change to modeled fields.
 
 ### Transformations
 
@@ -263,7 +259,7 @@ For geographic comparisons, first compare within the same Problems. A later Prob
 
 ## 9. Orchestration and publication
 
-Configure EventBridge Scheduler with an explicit timezone. For example, run collection daily at 06:00 UTC and show local times in the dashboard. This is a collection schedule, not a promise about when the source publishes its daily changes.
+Configure EventBridge Scheduler with an explicit timezone. For example, run collection daily at 06:00 UTC, about 4.5 hours after the source's observed daily publication at about 01:33 UTC, and show local times in the dashboard. This is a collection schedule, not a promise about when the source publishes its daily changes.
 
 Use a Snowflake task graph for dependent warehouse work. Tasks support scheduled processing; use dependencies and stored procedures to implement this project's gates. [S6]
 
@@ -301,11 +297,13 @@ Let `t0` be creation time and `t7 = t0 + 168 hours`. For a trusted outcome snaps
 
 Start conservatively by requiring every training example to be at least seven days old plus a configurable source-publication allowance. A starting allowance might be two days, but measure actual delays before choosing it permanently. Calendar age alone does not prove that an outcome has been observed.
 
+Some agencies record `closed_date` with date-only precision, shown as exactly 00:00:00 (83% of DOB closures in August 2026). For such a Date-Only Closure, compare calendar days in New York time: a closure day before the day containing `t7` is label `0`, a closure day after it is label `1`, and a closure on the same day as `t7` has no Label and is excluded. Report excluded counts by agency.
+
 Treat closed records with missing closure times, closure before creation, and conflicting status as explicit exceptions. A Reopened Request (observed Closed, later observed open) is excluded from training. Requests closed as duplicates of another Request count as Closed (label `0`); report their share in the model card. A mutable current record may not reveal first closure or reopening. Document the target as the closure recorded in the available data and preserve label versions when later corrections arrive.
 
 ### Prediction time must match the claim
 
-Daily collection means the system may first observe a request hours after it was created. Record both `created_date` and `first_observed_at`. For the Risk Queue, score only Modeling Cohort records first observed within a configured interval after creation and still below the seven-day horizon. The source publishes with a lag (the newest record was about 1.5 days old when checked), so a 24-hour window would leave the queue nearly empty. Measure the creation-to-first-observed lag in week 1 and set the window near its 90th percentile; default to 72 hours until measured. The seven-day clock still starts at `created_date`.
+Daily collection means the system may first observe a request hours after it was created. Record both `created_date` and `first_observed_at`. For the Risk Queue, score only Modeling Cohort records first observed within a configured interval after creation and still below the seven-day horizon. The source publishes once a day with a lag, so a 24-hour window would leave the queue nearly empty. Inspection measured creation-to-First-Observed at about 23–47 hours on normal days; use a 72-hour window so one missed run still keeps Requests eligible, and re-check the lag from `:created_at` after deployment. The seven-day clock still starts at `created_date`.
 
 Retain an admission-time score rather than silently recomputing it using later information. Requests already older than seven days and still open belong in an **overdue queue**: the delay is already observed, so a prediction of that event adds no value.
 
@@ -444,6 +442,7 @@ Focus tests on errors that would change the project's results:
 - Pagination neither skips nor duplicates records at a boundary.
 - Retries preserve deterministic identities and checkpoints.
 - A closure exactly at the seven-day cutoff receives label 0; later closure receives label 1.
+- A Date-Only Closure on the day containing `t7` receives no Label.
 - Young requests and stale outcome observations do not receive training labels.
 - Invalid timestamps and inconsistent status are handled explicitly.
 - Duplicate and out-of-order observations leave current state correct.

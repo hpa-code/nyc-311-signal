@@ -66,6 +66,10 @@ _Avoid_: Dataset, sample
 **Matured Label**:
 A Label whose outcome was knowable at a given point in time.
 
+**Date-Only Closure**:
+A Closure recorded with a date but no meaningful time of day. Judged by calendar day; one falling on the same day as the Seven-Day Horizon yields no Label.
+_Avoid_: Midnight closure
+
 **Reopened Request**:
 A Service Request observed Closed and later observed open again. Treated as an exception and excluded from training.
 
