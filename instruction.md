@@ -5,6 +5,8 @@
 **Prepared:** October 22, 2026  
 **Status:** Proposed architecture. This document describes what to build; it does not claim that infrastructure has been deployed or that a model has achieved any particular performance.
 
+**Vocabulary:** Capitalized domain terms (Service Request, Problem, Observation, Request Version, Delayed, Overdue, Label, Modeling Cohort, Admission Score, Publication, and others) are defined in [`GLOSSARY.md`](GLOSSARY.md). Recorded decisions live in [`docs/adr/`](docs/adr/).
+
 ## 1. The project in plain language
 
 Build a system that collects NYC 311 service requests, keeps their information up to date, analyzes closure patterns, and predicts which newly submitted requests will not be closed within seven days. Present the results through a deployed web dashboard.
@@ -12,7 +14,7 @@ Build a system that collects NYC 311 service requests, keeps their information u
 311 requests include issues such as noise, heating problems, garbage, potholes, and broken streetlights. The project helps answer:
 
 - Which new requests are likely to miss the seven-day closure threshold?
-- Which boroughs and complaint categories have longer closure times?
+- Which boroughs and Problems have longer closure times?
 - How does the open backlog change over time?
 - Which requests could an analyst review first?
 - How reliable are the predictions on later, unseen data?
@@ -25,9 +27,11 @@ The main deliverable is a working application supported by an automated data pip
 
 ### Initial version
 
-Start with approximately 100,000 historical records spanning enough time to create separate training, validation, and test periods. Record the exact date range, agency coverage, and sampling method. Do not select only closed complaints, because that would remove part of the outcome being predicted.
+Collect every agency, citywide, for Service Requests created from 2025-01-01 onward (roughly 7 million records; September 2026 alone had about 324,000). Do not sample: unsampled data keeps volume, backlog, and closure-rate analytics correct. Do not select only closed requests, because that would remove part of the outcome being predicted.
 
-Build the full path from API to dashboard before expanding to millions of records. If the sample covers only selected agencies or categories, label that coverage clearly in the application.
+A citywide 100,000-record sample would cover only about nine days, too short to separate training, validation, and test periods behind a seven-day horizon. Instead, prove the full path from API to dashboard on a one-week slice first, then run the full backfill.
+
+NYPD Requests (about half of volume, almost never Delayed) stay in analytics but are excluded from the Modeling Cohort. See [ADR 0001](docs/adr/0001-exclude-nypd-from-modeling-cohort.md). Label this coverage clearly in the application.
 
 ### Completed project
 
@@ -93,6 +97,8 @@ flowchart TD
 
 The arrows represent data flow. The Streamlit server queries Snowflake; Snowflake does not push data directly into a user's browser.
 
+All AWS resources live in **us-east-2**, the same region as the Snowflake account (`AWS_US_EAST_2`), so Snowpipe loads avoid cross-region transfer.
+
 CloudWatch monitors AWS jobs and the application. Snowflake execution history and project control tables track warehouse processing. IAM, Snowflake roles, and Secrets Manager control access. GitHub Actions and Terraform support repeatable deployment.
 
 ### Platform responsibilities
@@ -126,8 +132,8 @@ NYC has renamed the display labels “Complaint Type” and “Descriptor” to 
 | `unique_key` | Request identifier; store as a string |
 | `created_date` | Submission time, cohort selection, calendar features |
 | `closed_date` | Label construction and historical closure analysis only |
-| `complaint_type` | Complaint category |
-| `descriptor` | Optional detail category, after checking stability and availability |
+| `complaint_type` | Problem |
+| `descriptor` | Problem Detail; optional, after checking stability and availability |
 | `agency` | Responsible agency |
 | `borough` | Geographic grouping |
 | `incident_zip` | Optional geography; retain as a string |
@@ -156,7 +162,9 @@ A backfill is the initial collection of older data.
 
 The API is not assumed to provide an immutable snapshot during a long export. Record extraction intervals and use overlap and reconciliation to reduce omissions. Verify the endpoint's current query and authentication requirements before coding. [S3]
 
-Use a bounded Lambda job for small batches. Standard Lambda event-function execution has a maximum configured timeout of 900 seconds; do not assume a complete backfill fits inside one invocation. Run larger imports through an ECS task or resumable orchestration. [S4]
+Use a bounded Lambda job for small batches. Standard Lambda event-function execution has a maximum configured timeout of 900 seconds; do not assume a complete backfill fits inside one invocation. Run the historical backfill as a one-off ECS Fargate task that reuses the daily collector code, partitioned by creation month and resumable per partition. [S4]
+
+Register a free Socrata app token for higher rate limits and store it in Secrets Manager.
 
 ### Daily collection strategy
 
@@ -165,10 +173,10 @@ Use three complementary passes:
 | Pass | Proposed starting policy | Purpose |
 |---|---|---|
 | Recent creation window | Re-fetch requests created in the last 30 days | Capture new records and recent changes |
-| Previously open requests | Re-fetch known open identifiers outside that window in bounded batches | Discover closures of older requests |
-| Historical reconciliation | Rotate through older date partitions on a weekly schedule | Detect late corrections and changed closed records |
+| Previously open requests | Re-fetch known open identifiers aged 30–90 days daily, in bounded batches | Discover closures of older requests |
+| Historical reconciliation | Weekly: re-fetch open identifiers older than 90 days and rotate through older date partitions | Detect late corrections, late closures, and changed closed records |
 
-The 30-day window and weekly schedule are configuration choices to tune after observing volume and runtime. They do not guarantee capture of every source change.
+The 30-day window, the 90-day split, and the weekly schedule are configuration choices to tune after observing volume and runtime. They do not guarantee capture of every source change.
 
 `created_date` is not a modification timestamp. Do not treat it as a complete incremental-update cursor. Only use a source update field if its availability and meaning have been verified.
 
@@ -216,20 +224,24 @@ Use a database such as `NYC311`, with separate schemas for raw data, cleaned dat
 
 | Table or view | Grain: what one row means | Purpose |
 |---|---|---|
-| `RAW.RAW_311_EVENTS` | One ingested source observation | Audit and replay input |
-| `CLEAN.REQUEST_VERSIONS` | One accepted observed version of a request | Preserve change history |
+| `RAW.RAW_311_OBSERVATIONS` | One ingested Observation | Audit and replay input (90-day retention) |
+| `CLEAN.REQUEST_VERSIONS` | One accepted Request Version (a changed payload hash) | Preserve change history |
 | `CLEAN.SERVICE_REQUESTS` | One current request | Deduplicated current state |
 | `CLEAN.QUARANTINED_RECORDS` | One rejected observation with reason | Diagnose malformed data |
-| `ANALYTICS.DAILY_COMPLAINT_STATS` | One date/category/agency/geography group | Submission and closure trends |
+| `ANALYTICS.DAILY_REQUEST_STATS` | One date/Problem/agency/geography group | Submission and closure trends |
 | `ANALYTICS.DAILY_BACKLOG` | One snapshot date/group | Observed open backlog |
 | `ML.FEATURE_SNAPSHOTS` | One request and feature cutoff/version | Reproducible model inputs |
 | `ML.TRAINING_LABELS` | One request and label snapshot | Matured target with provenance |
-| `ML.COMPLAINT_PREDICTIONS` | One request/model/feature version | Stored scores and scoring time |
+| `ML.REQUEST_PREDICTIONS` | One request/model/feature version | Stored scores and scoring time |
 | `ML.MODEL_EVALUATION` | One model/evaluation period/slice | Metrics and sample sizes |
 | `OPS.PIPELINE_RUNS` | One execution or partition | Counts, status, errors, checkpoints |
 | `OPS.DATA_QUALITY_RESULTS` | One check execution | Quality gates and trends |
 | `OPS.PUBLICATIONS` | One complete published release | Dashboard consistency and freshness |
 | `APP.*` views | Approved public-facing records or aggregates | Read-only application access |
+
+### Retention
+
+S3 is the replay source and keeps every Observation file; a lifecycle rule moves objects older than 90 days to a cheaper storage class. `RAW.RAW_311_OBSERVATIONS` keeps 90 days. `CLEAN.REQUEST_VERSIONS` stores only changed states, so it stays small even though the daily 30-day re-fetch produces about 320,000 mostly identical Observations per day.
 
 ### Transformations
 
@@ -247,7 +259,7 @@ Show submission counts, closure counts, open backlog, and median/p90 closure dur
 
 A historical backlog reconstructed from today's records is not necessarily the backlog that was known at that time. Label retrospective estimates accordingly; use saved daily snapshots for observed historical backlog.
 
-For geographic comparisons, first compare within the same complaint categories. A later category-adjusted view can apply the same category weights to each borough. Publish the weights, minimum sample size, and missing-category rules; do not imply causal differences in service quality.
+For geographic comparisons, first compare within the same Problems. A later Problem-adjusted view can apply the same Problem weights to each borough. Publish the weights, minimum sample size, and missing-Problem rules; do not imply causal differences in service quality.
 
 ## 9. Orchestration and publication
 
@@ -289,11 +301,11 @@ Let `t0` be creation time and `t7 = t0 + 168 hours`. For a trusted outcome snaps
 
 Start conservatively by requiring every training example to be at least seven days old plus a configurable source-publication allowance. A starting allowance might be two days, but measure actual delays before choosing it permanently. Calendar age alone does not prove that an outcome has been observed.
 
-Treat closed records with missing closure times, closure before creation, conflicting status, and reopening histories as explicit exceptions. A mutable current record may not reveal first closure or reopening. Document the target as the closure recorded in the available data and preserve label versions when later corrections arrive.
+Treat closed records with missing closure times, closure before creation, and conflicting status as explicit exceptions. A Reopened Request (observed Closed, later observed open) is excluded from training. Requests closed as duplicates of another Request count as Closed (label `0`); report their share in the model card. A mutable current record may not reveal first closure or reopening. Document the target as the closure recorded in the available data and preserve label versions when later corrections arrive.
 
 ### Prediction time must match the claim
 
-Daily collection means the system may first observe a request hours after it was created. Record both `created_date` and `first_observed_at`. For an initial new-request queue, score only records first observed within a configured short interval, such as 24 hours, and still below the seven-day horizon.
+Daily collection means the system may first observe a request hours after it was created. Record both `created_date` and `first_observed_at`. For the Risk Queue, score only Modeling Cohort records first observed within a configured interval after creation and still below the seven-day horizon. The source publishes with a lag (the newest record was about 1.5 days old when checked), so a 24-hour window would leave the queue nearly empty. Measure the creation-to-first-observed lag in week 1 and set the window near its 90th percentile; default to 72 hours until measured. The seven-day clock still starts at `created_date`.
 
 Retain an admission-time score rather than silently recomputing it using later information. Requests already older than seven days and still open belong in an **overdue queue**: the delay is already observed, so a prediction of that event adds no value.
 
@@ -303,7 +315,7 @@ Re-scoring older open requests would be a separate model with a different questi
 
 ### Initial features
 
-Use complaint category, agency, borough, creation hour, weekday, and month. Add location type or descriptor only after checking availability and stability. Handle unseen categories explicitly.
+Use Problem, agency, borough, creation hour, weekday, and month. Add location type or Problem Detail only after checking availability and stability. Handle unseen categories explicitly.
 
 Exclude `closed_date`, final status, resolution text, time to closure, and any other post-submission field from the feature matrix. A field can be allowed for label construction or display while forbidden for prediction.
 
@@ -322,7 +334,7 @@ Leave these features out until their historical availability can be established.
 
 ### Training sequence
 
-1. Build a constant-prevalence baseline and a simple historical category baseline.
+1. Build a constant-prevalence baseline, a historical Problem baseline, and an agency-only historical-rate baseline. A model must beat the agency-only baseline to count.
 2. Train logistic regression with preprocessing fitted on training data only.
 3. Compare Random Forest and/or XGBoost if they materially improve useful metrics.
 4. Choose thresholds and any probability calibration using validation data only.
@@ -374,9 +386,11 @@ Build Streamlit locally, package it in Docker, push the image to ECR, and deploy
 | Model performance | Baselines, time splits, metrics, model version, and limitations |
 | Pipeline health | Last successful run and publication status; detailed logs restricted |
 
+The dashboard is public, with no login, and is aimed at portfolio reviewers. The Risk Queue shows only Request ID, Problem, agency, borough, created date, and Admission Score.
+
 Use parameterized queries, bounded results, pagination, and cached aggregates. Match cache lifetime to publication freshness. The browser never receives Snowflake credentials. The server uses a dedicated read-only role with access only to approved views.
 
-Public views should omit exact addresses, apartment details, unnecessary free text, and raw pinpoint locations. Use boroughs or suitably aggregated geographic cells with a minimum-count rule. Do not include raw addresses in downloadable prediction tables.
+Public views should omit exact addresses, apartment details, unnecessary free text, and raw pinpoint locations. Use boroughs or aggregated geographic cells with at least 20 requests each. Do not show ZIP codes in the Risk Queue. Do not include raw addresses in downloadable prediction tables.
 
 If the latest pipeline run fails, show the last valid release with a visible timestamp and stale-data message. Do not replace missing scores with fabricated probabilities.
 
@@ -397,7 +411,7 @@ Use workload IAM roles instead of static AWS access keys. Store runtime secrets 
 
 Block public S3 access and enable encryption. Restrict ECS inbound traffic to the load balancer security group. Configure outbound connectivity needed for Snowflake, image pulls, secrets, and logging. Private subnets need an explicit egress plan; NAT gateways can materially affect a small project's budget.
 
-Use Terraform for reproducible AWS resources and reviewed SQL migrations for Snowflake objects. Separate development and production settings. Protect persistent data from accidental destruction and review plans before applying destructive changes.
+Use Terraform for reproducible AWS resources and reviewed SQL migrations for Snowflake objects. Separate development and production within one account each: Snowflake databases `NYC311_DEV` and `NYC311` share one X-Small warehouse, and AWS resources carry `dev-`/`prod-` prefixes through Terraform environment folders. Dev runs only on small fixture slices; only prod runs daily. Protect persistent data from accidental destruction and review plans before applying destructive changes.
 
 ## 14. Monitoring, failure handling, and recovery
 
@@ -447,6 +461,12 @@ After merge, build an image tagged with the commit SHA, push it to ECR, deploy i
 Do not assume the project is free. The major recurring costs may come from always-on containers, the load balancer, network egress infrastructure, Snowflake queries, serverless loading, and retained storage/logs.
 
 Before deployment, estimate costs using the selected region, service configuration, account terms, and current pricing. This document intentionally does not repeat a fixed monthly price that could become outdated.
+
+### Account plan
+
+- **Snowflake:** trial account (about $400 in credits, 30 days, ending around late November 2026). Add a payment method before it ends; with an X-Small warehouse, 60-second auto-suspend, and short daily runs, expect very roughly $10–20 per month.
+- **AWS:** Free plan with up to $200 in credits ($100 at signup, up to $100 more for starter activities). The account closes after 6 months or when credits run out, whichever comes first; upgrade to the Paid plan beforehand to keep the demo alive.
+- **Dashboard hosting:** always on from week 4, paid from credits. A minimal setup (load balancer, one 0.25 vCPU / 0.5 GB Fargate task, public IPv4) costs roughly $37 per month, about five months of credits. Set an AWS budget alert at $150 consumed. Fallback: host the public page on Streamlit Community Cloud reading the same app views, keeping the ECS deployment in Terraform.
 
 ### Starting controls
 
@@ -524,7 +544,7 @@ Four weeks is a planning estimate for focused work with some Python and SQL expe
 
 | Phase | Work | Evidence required before proceeding |
 |---|---|---|
-| Week 1: ingestion and storage | Inspect schema; establish budgets and roles; collect roughly 100,000 records; load S3 and Snowflake; schedule bounded refreshes | Reconciled source-file counts, raw rows, and distinct clean keys; successful retry |
+| Week 1: ingestion and storage | Inspect schema; establish budgets and roles; collect a one-week citywide slice; measure source publication lag; load S3 and Snowflake; run the full 2025-onward backfill; schedule bounded refreshes | Reconciled source-file counts, raw rows, and distinct clean keys; successful retry |
 | Week 2: transformations and analytics | Build current/history tables, update reconciliation, data checks, analytics, and publication gating | Existing request updates correctly; stale version cannot overwrite it; SQL metrics match a hand-checked sample |
 | Week 3: ML | Define eligible cohorts; build baseline; compare models; evaluate future periods; register and score | Reproducible splits, leakage checks, real metrics, stored versioned predictions |
 | Week 4: application and operations | Build dashboard; deploy container; configure HTTPS, monitoring, CI/CD, and runbook | Working URL, read-only access, freshness display, failure recovery demonstration |
@@ -535,7 +555,7 @@ Four weeks is a planning estimate for focused work with some Python and SQL expe
 2. Choose a historical date range and document its coverage.
 3. Create the S3 bucket/prefixes and least-privilege roles.
 4. Write a collector that supports bounded queries, pagination, retries, and checkpoints.
-5. Fetch a small test partition, then expand toward 100,000 records.
+5. Fetch a small test partition, then a one-week citywide slice, then the full backfill by month.
 6. Create the RAW table, file format, stage, and storage integration.
 7. Load the backfill, then enable automatic loading for new incremental files.
 8. Build the first current-state table with deterministic deduplication.
