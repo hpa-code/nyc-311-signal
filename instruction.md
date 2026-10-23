@@ -465,7 +465,7 @@ Before deployment, estimate costs using the selected region, service configurati
 
 - **Snowflake:** trial account (about $400 in credits, 30 days, ending around late November 2026). Add a payment method before it ends; with an X-Small warehouse, 60-second auto-suspend, and short daily runs, expect very roughly $10–20 per month.
 - **AWS:** Free plan with up to $200 in credits ($100 at signup, up to $100 more for starter activities). The account closes after 6 months or when credits run out, whichever comes first; upgrade to the Paid plan beforehand to keep the demo alive.
-- **Dashboard hosting:** always on from week 4, paid from credits. A minimal setup (load balancer, one 0.25 vCPU / 0.5 GB Fargate task, public IPv4) costs roughly $37 per month, about five months of credits. Set an AWS budget alert when $150 of the $200 credits is consumed. The Free plan never bills; the alert warns before credits hit $0, when the account closes and the demo stops. Fallback: host the public page on Streamlit Community Cloud reading the same app views, keeping the ECS deployment in Terraform.
+- **Dashboard hosting:** always on from week 4, paid from credits. A minimal setup (load balancer, one 0.25 vCPU / 0.5 GB Fargate task, public IPv4) costs roughly $37 per month, about five months of credits. Set an AWS budget alert at $10 per month (owner's choice; it fires monthly once the dashboard is always on). The Free plan never bills; the alert warns before credits hit $0, when the account closes and the demo stops. Fallback: host the public page on Streamlit Community Cloud reading the same app views, keeping the ECS deployment in Terraform.
 
 ### Starting controls
 

@@ -4,7 +4,7 @@
 
 **Blocked by:** 02 (Scaffold repo and dev infrastructure)
 
-**Status:** ready-for-agent
+**Status:** done
 
 **Mirror:** GitHub #4
 
@@ -14,7 +14,7 @@
 - [x] Per-partition checkpoints; a resumed run only redoes incomplete partitions
 - [x] Manifest lists every file and row count; extraction is marked complete only after all files are stored
 - [x] Seam 1 tests: page-boundary ties neither skip nor duplicate rows, a retry keeps identities, resume after a crash, missing optional fields do not crash
-- [ ] Demo: manifest row total equals the API count for the chosen week
+- [x] Demo: manifest row total equals the API count for the chosen week
 
 ## Comments
 
@@ -35,3 +35,13 @@ Decisions and notes:
 - A row missing `unique_key`, `created_date` or the system fields, or with a malformed `created_date`, fails the run with `SchemaError`, because keyset pagination cannot proceed without them. Field-level quarantine stays in the warehouse (ticket 05).
 - Rate limiting is reactive only (429 plus Retry-After, with jittered backoff). Revisit if the full backfill (08) gets throttled.
 - instruction.md §17 lists `checkpoints.py`. Checkpointing lives in `collector.py` instead, beside the Collector module named in the spec.
+
+**2026-10-23 (agent):** Demo against S3, with the token read from Secrets Manager:
+
+```
+AWS_PROFILE=nyc311 NYC311_SOCRATA_SECRET_NAME=dev/nyc311/socrata-app-token \
+  python -m ingestion.fetch_311 --start 2026-09-01 --days 7 --store s3:dev-nyc311-observations-778031418236
+run slice-2026-09-01-7d: 12 files, 71830 rows   (all 7 days: manifest == API count)
+```
+
+The bucket holds 21 objects (12 data, 1 manifest, 8 checkpoints), 16.3 MB.

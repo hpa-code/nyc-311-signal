@@ -78,7 +78,7 @@ Vocabulary follows `GLOSSARY.md`. Architecture and policy detail live in `instru
 46. As the operator, I want source freshness tracked separately from job success, so that a successful job that fetched stale data still raises a warning.
 47. As the operator, I want a recovery drill (interrupt extraction, resume, rebuild, compare against an uninterrupted run, replay an old Observation), so that I can demonstrate recovery.
 48. As the operator, I want S3 to keep every Observation file (moved to cheaper storage after 90 days) and Snowflake RAW to keep 90 days, so that replay stays possible while storage stays cheap.
-49. As the operator, I want an AWS budget alert when $150 of the $200 Free-plan credits are consumed, so that I can upgrade or shut down before the account closes.
+49. As the operator, I want an AWS budget alert at $10 per month, so that I notice spending early and can upgrade or shut down before the $200 Free-plan credits run out.
 50. As the operator, I want small Snowflake warehouses with 60-second auto-suspend and query timeouts, so that post-trial cost stays around $10–20 per month.
 51. As the operator, I want serverless (Snowpipe) consumption monitored separately from warehouse consumption, so that loading cost does not hide.
 52. As the operator, I want documented shutdown instructions, so that I can stop optional infrastructure when not needed.
@@ -143,7 +143,7 @@ Vocabulary follows `GLOSSARY.md`. Architecture and policy detail live in `instru
 - Modeling Cohort excludes NYPD (ADR 0001); analytics and the Overdue Queue include it.
 - Admission Score eligibility: Modeling Cohort, First Observed within 72 hours of creation, still below the horizon.
 - Public data: Risk Queue fields limited to Request ID, Problem, agency, borough, created date, and Admission Score; geography aggregated with a minimum of 20 per cell; no addresses, ZIP codes in the queue, or raw coordinates anywhere public; no raw addresses in downloads.
-- Accounts and cost: Snowflake trial (then a paid account at roughly $10–20 per month), AWS Free plan with $200 credits and a budget alert at $150 consumed, dashboard always on from week 4 (~$37 per month), with Streamlit Community Cloud as the fallback host.
+- Accounts and cost: Snowflake trial (then a paid account at roughly $10–20 per month), AWS Free plan with $200 credits and a $10 per month budget alert, dashboard always on from week 4 (~$37 per month), with Streamlit Community Cloud as the fallback host.
 
 ## Testing Decisions
 
