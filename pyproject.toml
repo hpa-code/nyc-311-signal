@@ -1,0 +1,18 @@
+[project]
+name = "nyc-311-intelligence"
+version = "0.1.0"
+description = "Daily NYC 311 pipeline, Delayed-Request model and public dashboard"
+requires-python = ">=3.13"
+dependencies = []
+
+[dependency-groups]
+dev = [
+    "pytest>=8",
+]
+
+[tool.uv]
+package = false
+
+[tool.pytest.ini_options]
+testpaths = ["ingestion/tests"]
+pythonpath = ["."]

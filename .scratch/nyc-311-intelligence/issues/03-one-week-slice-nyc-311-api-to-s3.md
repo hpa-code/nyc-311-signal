@@ -15,3 +15,7 @@
 - [ ] Manifest lists every file and row count; extraction is marked complete only after all files are stored
 - [ ] Seam 1 tests: page-boundary ties neither skip nor duplicate rows, a retry keeps identities, resume after a crash, missing optional fields do not crash
 - [ ] Demo: manifest row total equals the API count for the chosen week
+
+## Comments
+
+**2026-10-22 (agent, from 02):** The dev ingestion role allows `s3:PutObject` under `data/` and `manifests/` only when the request carries `If-None-Match: *`. The collector must write Observation files and manifests with a conditional put, and treat 412 Precondition Failed as "already written". Checkpoints are writable without conditions.

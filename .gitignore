@@ -1,8 +1,10 @@
 # Secrets / env
 .env
 .env.*
+!.env.example
 *.pem
 *.key
+*secret*.json
 
 # Python
 __pycache__/
@@ -15,6 +17,8 @@ venv/
 *.tfstate
 *.tfstate.*
 *.tfvars
+tfplan
+*.tfplan
 
 # Data
 data/raw/
