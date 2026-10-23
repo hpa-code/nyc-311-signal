@@ -3,10 +3,15 @@ name = "nyc-311-intelligence"
 version = "0.1.0"
 description = "Daily NYC 311 pipeline, Delayed-Request model and public dashboard"
 requires-python = ">=3.13"
-dependencies = []
+dependencies = [
+    "boto3>=1.43.118",
+]
 
 [dependency-groups]
 dev = [
+    "boto3-stubs[s3]>=1.43.118",
+    "moto[s3]>=5.2.4",
+    "mypy>=2.4.0",
     "pytest>=8",
 ]
 
@@ -16,3 +21,7 @@ package = false
 [tool.pytest.ini_options]
 testpaths = ["ingestion/tests"]
 pythonpath = ["."]
+
+[tool.mypy]
+python_version = "3.13"
+files = ["ingestion"]
