@@ -2,11 +2,11 @@
 
 ### Issue tracker
 
-Issues tracked in this repo's GitHub Issues via the `gh` CLI. See `docs/agents/issue-tracker.md`.
+Issues tracked as local markdown under `.scratch/<feature>/` (GitHub issues #1–#17 are a mirror). See `docs/agents/issue-tracker.md`.
 
 ### Triage labels
 
-Default five canonical labels (`needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`). See `docs/agents/triage-labels.md`.
+Default five canonical roles (`needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`), recorded as a `Status:` line in each local issue file. See `docs/agents/triage-labels.md`.
 
 ### Domain docs
 
