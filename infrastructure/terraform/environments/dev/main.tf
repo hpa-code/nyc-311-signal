@@ -65,6 +65,8 @@ module "backfill" {
   socrata_secret_name = module.core.socrata_secret_name
   # Backfill run backfill-202501-202610; the daily cursor covers what follows.
   through = "2026-10"
+  # Commit the pushed image was built from (README: Historical backfill).
+  image_tag = "6e2be91"
 }
 
 # Values from `DESC INTEGRATION NYC311_DEV_S3` (snowflake/setup_dev.sql).
