@@ -4,12 +4,23 @@
 
 **Blocked by:** 05 (Request Versions, stale-overwrite guard and quarantine)
 
-**Status:** ready-for-agent
+**Status:** done
 
 **Mirror:** GitHub #9
 
-- [ ] One-off ECS Fargate task runs the same collector in partition mode, one partition per creation month
-- [ ] Resumes only incomplete months after interruption
-- [ ] Loaded with bulk COPY under load tracking so no file loads twice through COPY and Snowpipe
-- [ ] Reconciliation report: source rows, raw rows and distinct Current Requests per month
-- [ ] Demo: kill the task mid-run, resume it, and counts reconcile
+- [x] One-off ECS Fargate task runs the same collector in partition mode, one partition per creation month
+- [x] Resumes only incomplete months after interruption
+- [x] Loaded with bulk COPY under load tracking so no file loads twice through COPY and Snowpipe
+- [x] Reconciliation report: source rows, raw rows and distinct Current Requests per month
+- [x] Demo: kill the task mid-run, resume it, and counts reconcile
+
+## Comments
+
+**2026-10-24 (agent): built and demoed.**
+- `ingestion/backfill.py` runs the collector over `creation_month_partitions` from 2025-01 through `--through`, as run `backfill-YYYYMM-YYYYMM` into `data/bulk/`. A rerun with the same `--through` resumes; if a killed task left its lease, it waits up to 20 minutes for it to expire. `--status` prints each month's checkpoint.
+- `modules/backfill` (Terraform): ECR `dev-nyc311-collector`, ECS cluster `dev-nyc311`, Fargate task `dev-nyc311-backfill` (ARM64, 0.5 vCPU, 1 GB) under the ingestion role, in the default VPC with a public IP, outbound-only security group, no NAT. Image: `ingestion/Dockerfile`. Ops commands are in `infrastructure/terraform/README.md`.
+- `warehouse/backfill.py load` waits for the run's manifest, then bulk-COPYs and processes each month from its own prefix in its own transaction (the warehouse's 600 s statement limit), then publishes once. `report` prints source, manifest, RAW and Current Request counts per month and exits 1 on any difference. Snowpipe never sees `data/bulk/`; COPY load history plus RAW's `source_file` guard make a rerun load nothing.
+- **Demo.** Task 1 started about 17:20 UTC and was stopped at 17:26 UTC, 12 files into March 2025. Python as PID 1 ignores SIGTERM, so ECS killed it with SIGKILL after 30 s (exit 137). Its lease stayed held until 17:42:58 UTC. Task 2, started at once, logged `waiting for the lease`, then wrote March's `part-00013` at 17:43:52 UTC. It did not refetch January or February, and no file was written twice. It finished at 18:58 UTC: 701 files, 6,889,517 rows, exit 0.
+- **Load:** 11 minutes for 22 months, 0 quarantined. It published `20261024T191225-52d8ed6a`, not stale.
+- **Report:** every month from 2025-01 to 2026-10 has source = manifest = RAW = Current Requests (e.g. 2025-01: 348,180). Current Requests total 6,889,517, created 2025-01-01 to 2026-10-23. RAW holds 7,510,623 Observations, the backfill plus the daily passes.
+- Left as is: a stop takes 30 s to become a kill (no init process in the image). Harmless, since resume handles either.

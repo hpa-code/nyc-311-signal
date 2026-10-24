@@ -29,3 +29,19 @@ output "collector_function_name" {
 output "alerts_topic_arn" {
   value = module.daily_collector.alerts_topic_arn
 }
+
+output "backfill_repository_url" {
+  value = module.backfill.repository_url
+}
+
+output "backfill_cluster_name" {
+  value = module.backfill.cluster_name
+}
+
+output "backfill_task_definition" {
+  value = module.backfill.task_definition
+}
+
+output "backfill_network_configuration" {
+  value = module.backfill.network_configuration
+}

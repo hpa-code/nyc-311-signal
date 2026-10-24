@@ -30,12 +30,22 @@ class Stages:
 
 def run(conn: SnowflakeConnection, stages: Stages = Stages()) -> dict[str, int | str]:
     """Run every step; returns rows loaded or merged per step, and the publish outcome."""
-    values = {"observations_stage": stages.observations, "manifests_stage": stages.manifests}
     counts: dict[str, int | str] = {
-        "manifests_loaded": _copy(conn, render(read("transformations/load_manifests.sql"), values)),
-        "observations_loaded": _bulk_load(conn, render(read("transformations/load_observations.sql"), values)),
+        "manifests_loaded": load_manifests(conn, stages.manifests),
+        "observations_loaded": load_observations(conn, stages.observations),
     }
-    return counts | _process(conn) | {"publication": publish(conn)["outcome"]}
+    return counts | process(conn) | {"publication": publish(conn)["outcome"]}
+
+
+def load_manifests(conn: SnowflakeConnection, stage: str) -> int:
+    """COPY run manifests from `stage` into OPS.RUN_MANIFESTS; returns manifests loaded."""
+    return _copy(conn, render(read("transformations/load_manifests.sql"), {"manifests_stage": stage}))
+
+
+def load_observations(conn: SnowflakeConnection, stage: str) -> int:
+    """Bulk COPY Observation files under `stage` (a stage or a path in one) into RAW;
+    returns rows that reached RAW."""
+    return _bulk_load(conn, render(read("transformations/load_observations.sql"), {"observations_stage": stage}))
 
 
 def process_ready_runs(conn: SnowflakeConnection) -> dict:
@@ -64,8 +74,9 @@ PROCESS_STEPS = {
 }
 
 
-def _process(conn: SnowflakeConnection) -> dict[str, int]:
-    """All-or-nothing: the stream offset only advances if every step commits.
+def process(conn: SnowflakeConnection) -> dict[str, int]:
+    """Quarantine, Request Versions and Current Requests for every pending Observation.
+    All-or-nothing: the stream offset only advances if every step commits.
     Holds the pipeline lock, like the readiness procedure, so publishing waits."""
     cur = conn.cursor()
     cur.execute("BEGIN")

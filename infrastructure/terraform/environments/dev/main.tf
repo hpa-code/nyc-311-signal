@@ -56,6 +56,17 @@ module "daily_collector" {
   alert_email    = var.alert_email
 }
 
+module "backfill" {
+  source = "../../modules/backfill"
+
+  environment         = "dev"
+  bucket_name         = module.core.bucket_name
+  role_arn            = module.core.ingestion_role_arn
+  socrata_secret_name = module.core.socrata_secret_name
+  # Backfill run backfill-202501-202610; the daily cursor covers what follows.
+  through = "2026-10"
+}
+
 # Values from `DESC INTEGRATION NYC311_DEV_S3` (snowflake/setup_dev.sql).
 # Not secret: Snowflake's IAM user and the external ID that pins this role to
 # that one integration.

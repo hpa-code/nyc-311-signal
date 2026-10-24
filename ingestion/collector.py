@@ -86,6 +86,13 @@ def creation_day_partitions(start: date, days: int) -> list[CreationWindow]:
     return [CreationWindow(first + timedelta(days=i), first + timedelta(days=i + 1)) for i in range(days)]
 
 
+def creation_month_partitions(first: date, last: date) -> list[CreationWindow]:
+    """One partition per NYC-local creation month, from `first`'s month through `last`'s."""
+    months = (last.year - first.year) * 12 + last.month - first.month + 1
+    starts = [datetime(first.year + (first.month - 1 + i) // 12, (first.month - 1 + i) % 12 + 1, 1) for i in range(months + 1)]
+    return [CreationWindow(start, end) for start, end in zip(starts, starts[1:])]
+
+
 def utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -246,7 +253,7 @@ class RunLayout:
     channel: str
 
     def checkpoint_key(self, window: Window) -> str:
-        return f"checkpoints/runs/{self.run_id}/partitions/{window.id}.json"
+        return partition_checkpoint_key(self.run_id, window)
 
     def data_key(self, window: Window, index: int) -> str:
         return (
@@ -261,6 +268,10 @@ class RunLayout:
 
 def run_state_key(run_id: str) -> str:
     return f"checkpoints/runs/{run_id}/run.json"
+
+
+def partition_checkpoint_key(run_id: str, window: Window) -> str:
+    return f"checkpoints/runs/{run_id}/partitions/{window.id}.json"
 
 
 def _new_checkpoint(window: Window) -> dict:

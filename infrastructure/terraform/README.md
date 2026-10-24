@@ -41,3 +41,35 @@ aws lambda invoke --region us-east-2 --function-name dev-nyc311-collector \
 ## Snowpipe notifications
 
 New objects under `data/daily/` (daily cursor passes) notify the Snowpipe `RAW.OBSERVATIONS_PIPE`. Slices and backfill write `data/bulk/`, which only bulk COPY (`python -m warehouse.pipeline`) loads, so no file is loaded by both. Its SQS queue ARN comes from `SHOW PIPES IN DATABASE NYC311_DEV` (`notification_channel`) and is set as `snowpipe_queue_arn` in `environments/dev/main.tf`. The queue is owned by Snowflake, one per Snowflake account, so a recreated pipe usually keeps the same ARN.
+
+## Historical backfill
+
+`modules/backfill` holds the collector image (ECR `dev-nyc311-collector`), the `dev-nyc311` ECS cluster and the one-off Fargate task `dev-nyc311-backfill`, which runs `python -m ingestion.backfill --through 2026-10` under the ingestion role: run `backfill-202501-202610`, one partition per creation month, written to `data/bulk/`. Nothing schedules it.
+
+Build and push the image (Apple silicon builds arm64 natively, which the task uses):
+
+```sh
+cd ../../../..   # repo root
+REPO=$(terraform -chdir=infrastructure/terraform/environments/dev output -raw backfill_repository_url)
+aws ecr get-login-password --region us-east-2 | docker login --username AWS --password-stdin "${REPO%%/*}"
+docker build --platform linux/arm64 -f ingestion/Dockerfile -t "${REPO}:latest" .
+docker push "${REPO}:latest"
+```
+
+Start it, and stop it (ECS sends SIGTERM, then SIGKILL after 30 s):
+
+```sh
+TF="terraform -chdir=infrastructure/terraform/environments/dev output -raw"
+aws ecs run-task --region us-east-2 --cluster "$($TF backfill_cluster_name)" --launch-type FARGATE \
+  --task-definition "$($TF backfill_task_definition)" \
+  --network-configuration "$($TF backfill_network_configuration)" --query 'tasks[0].taskArn' --output text
+aws ecs stop-task --region us-east-2 --cluster dev-nyc311 --task <task-arn>
+```
+
+Starting it again resumes: complete months are skipped and the interrupted month continues from its last stored page. A killed task never releases its lease, so the new task first waits up to 16 minutes for it to expire. Progress, at any time:
+
+```sh
+uv run --env-file .env python -m ingestion.backfill --through 2026-10 --store s3:$(terraform -chdir=infrastructure/terraform/environments/dev output -raw bucket_name) --status
+```
+
+Logs are in CloudWatch under `/ecs/dev-nyc311-backfill`. Once the run's manifest exists, load and reconcile it with `python -m warehouse.backfill load|report --through 2026-10`.
