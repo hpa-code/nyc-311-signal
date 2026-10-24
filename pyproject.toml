@@ -33,4 +33,4 @@ pythonpath = ["."]
 
 [tool.mypy]
 python_version = "3.13"
-files = ["ingestion", "warehouse", "dashboard"]
+files = ["ingestion", "warehouse", "dashboard", "tableau"]

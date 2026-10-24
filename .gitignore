@@ -31,3 +31,7 @@ data/raw/
 
 # Lambda bundles built by Terraform
 infrastructure/terraform/modules/*/build/
+
+# Tableau Public companion exports
+tableau/out/
+*.twbx

@@ -1,10 +1,12 @@
 """Seam 2: fixture Observations into a dev database; assertions on APP views."""
 
+import csv
 from datetime import date, datetime, timezone
 
 import pytest
 from snowflake.connector.errors import ProgrammingError
 
+from tableau.export import export
 from warehouse.connection import connect
 from warehouse.pipeline import run
 from warehouse.tests.fixtures import EXTRACTED, STAGES, source_row, stage_collector_run
@@ -70,6 +72,7 @@ def test_dashboard_role_reads_app_views_and_nothing_else(test_env):
         cur = dashboard.cursor()
         cur.execute("SELECT COUNT(*) FROM APP.OVERVIEW_DAILY")
         cur.execute("SELECT COUNT(*) FROM APP.DATA_COVERAGE")
+        cur.execute("SELECT COUNT(*) FROM APP.TABLEAU_DAILY")
         for forbidden in (
             "SELECT COUNT(*) FROM CLEAN.SERVICE_REQUESTS",
             "SELECT COUNT(*) FROM RAW.RAW_311_OBSERVATIONS",
@@ -79,3 +82,28 @@ def test_dashboard_role_reads_app_views_and_nothing_else(test_env):
         ):
             with pytest.raises(ProgrammingError):
                 cur.execute(forbidden)
+
+
+def test_tableau_export_writes_counts_without_request_detail(empty_db, test_env, tmp_path):
+    _, env = test_env
+    rows = [
+        source_row("400", "2026-09-01T08:00:00.000"),
+        source_row("401", "2026-09-01T09:00:00.000", status="Closed", closed_date="2026-09-02T09:00:00.000"),
+        source_row("402", "2026-09-01T10:00:00.000", borough="QUEENS", incident_address="1 MAIN ST"),
+    ]
+    stage_collector_run(empty_db, tmp_path, "tableau", rows, date(2026, 9, 1), 1, EXTRACTED)
+    run(empty_db, STAGES)
+
+    with connect(env.dashboard_role, env.warehouse, env.database) as dashboard:
+        written = export(dashboard, tmp_path / "out")
+
+    with open(tmp_path / "out" / "nyc311_daily.csv", newline="") as f:
+        daily = list(csv.DictReader(f))
+    assert written == {"nyc311_daily.csv": 2, "nyc311_coverage.csv": 1}
+    assert [(r["borough"], r["requests"], r["closed_requests"], r["open_requests"]) for r in daily] == [
+        ("BROOKLYN", "2", "1", "1"),
+        ("QUEENS", "1", "0", "1"),
+    ]
+    assert set(daily[0]) == {
+        "created_date", "borough", "agency", "problem", "channel", "requests", "closed_requests", "open_requests",
+    }
