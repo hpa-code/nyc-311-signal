@@ -22,7 +22,7 @@ provider "aws" {
 
   default_tags {
     tags = {
-      Project     = "nyc-311-intelligence"
+      Project     = "nyc-311-signal"
       Environment = "dev"
       ManagedBy   = "terraform"
     }

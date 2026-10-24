@@ -1,5 +1,5 @@
 [project]
-name = "nyc-311-intelligence"
+name = "nyc-311-signal"
 version = "0.1.0"
 description = "Daily NYC 311 pipeline, Delayed-Request model and public dashboard"
 requires-python = ">=3.13"

@@ -1,4 +1,4 @@
-# NYC 311 Intelligence: End-to-End AWS + Snowflake Project
+# NYC 311 Signal: End-to-End AWS + Snowflake Project
 
 **Project owner:** Hari Acharya  
 **Document:** System design and implementation guide  
@@ -485,7 +485,7 @@ At larger scale, partition extraction, use suitable batch file sizes rather than
 ## 17. Repository structure
 
 ```text
-nyc-311-intelligence/
+nyc-311-signal/
   instruction.md
   README.md
   pyproject.toml

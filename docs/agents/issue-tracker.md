@@ -31,4 +31,4 @@ Used by `/wayfinder`. The **map** is a file with one **child** file per ticket.
 
 ## GitHub mirror
 
-The spec and tickets in `.scratch/nyc-311-intelligence/` were also published as GitHub issues #1–#17 (each file has a `Mirror:` line). The local files are the source of truth for now; GitHub issues are not kept in sync automatically.
+The spec and tickets in `.scratch/nyc-311-signal/` were also published as GitHub issues #1–#17 (each file has a `Mirror:` line). The local files are the source of truth for now; GitHub issues are not kept in sync automatically.

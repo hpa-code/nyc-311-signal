@@ -1,4 +1,4 @@
-# NYC 311 Intelligence
+# NYC 311 Signal
 
 Collects NYC 311 Service Requests, tracks how they change, and predicts which new ones will be Delayed, so analysts can review closure patterns and risk.
 

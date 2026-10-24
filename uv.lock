@@ -878,7 +878,7 @@ wheels = [
 ]
 
 [[package]]
-name = "nyc-311-intelligence"
+name = "nyc-311-signal"
 version = "0.1.0"
 source = { virtual = "." }
 default-groups = ["dashboard", "dev", "warehouse"]
