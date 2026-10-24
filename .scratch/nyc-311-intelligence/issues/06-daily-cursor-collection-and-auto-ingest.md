@@ -15,3 +15,9 @@
 - [ ] A readiness task starts downstream work only when the manifest reconciles with loaded files and counts, and tracks consumed runs
 - [ ] Seam 1 tests for the cursor, the overlap and the lease
 - [ ] Demo: a Request closed at the source appears closed in the Current Request after the next run
+
+## Comments
+
+**2026-10-23 (agent, from 04):**
+- Bulk COPY (`snowflake/transformations/load_observations.sql`) reads the whole `data/` prefix, and only COPY load history (64 days) stops reloads. Before Snowpipe reads the same prefix, add coordinated tracking per story 38: separate backfill and incremental prefixes, or skip files already in `RAW.RAW_311_OBSERVATIONS.source_file`.
+- The ingestion role's policy (If-None-Match puts) has not yet run as a real workload; the first Lambda run tests it.

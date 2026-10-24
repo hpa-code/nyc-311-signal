@@ -1,0 +1,81 @@
+"""Seam 2: fixture Observations into a dev database; assertions on APP views."""
+
+from datetime import date, datetime, timezone
+
+import pytest
+from snowflake.connector.errors import ProgrammingError
+
+from warehouse.connection import connect
+from warehouse.pipeline import run
+from warehouse.tests.fixtures import EXTRACTED, STAGES, source_row, stage_collector_run
+
+
+def rows_of(conn, sql: str) -> list[dict]:
+    cur = conn.cursor().execute(sql)
+    names = [c[0].lower() for c in cur.description]
+    return [dict(zip(names, r)) for r in cur.fetchall()]
+
+
+def test_collected_slice_reaches_the_overview_and_reconciles(empty_db, tmp_path):
+    rows = [
+        source_row("100", "2026-09-01T08:00:00.000"),
+        source_row("101", "2026-09-01T09:30:00.000", status="Closed", closed_date="2026-09-01T12:00:00.000"),
+        source_row("102", "2026-09-01T23:59:59.000"),
+        source_row("200", "2026-09-02T00:00:00.000", status="Closed", closed_date="2026-09-03T00:00:00.000"),
+    ]
+    manifest = stage_collector_run(empty_db, tmp_path, "slice", rows, date(2026, 9, 1), 2, EXTRACTED)
+
+    run(empty_db, STAGES)
+
+    daily = rows_of(empty_db, "SELECT * FROM APP.OVERVIEW_DAILY ORDER BY created_date")
+    assert daily == [
+        {"created_date": date(2026, 9, 1), "requests": 3, "closed_requests": 1, "open_requests": 2},
+        {"created_date": date(2026, 9, 2), "requests": 1, "closed_requests": 1, "open_requests": 0},
+    ]
+    [coverage] = rows_of(empty_db, "SELECT * FROM APP.DATA_COVERAGE")
+    assert manifest["row_count"] == 4
+    assert coverage["manifest_rows"] == 4
+    assert coverage["observations_loaded"] == 4
+    assert coverage["distinct_requests_observed"] == 4
+    assert coverage["current_requests"] == 4
+    assert coverage["files_loaded"] == manifest["file_count"] == coverage["manifest_files"]
+    assert (coverage["first_created_date"], coverage["last_created_date"]) == (date(2026, 9, 1), date(2026, 9, 2))
+
+
+def test_newer_observation_wins_and_reloading_changes_nothing(empty_db, tmp_path):
+    later = datetime(2026, 9, 11, 6, 0, tzinfo=timezone.utc)
+    stage_collector_run(empty_db, tmp_path, "day-1", [source_row("300", "2026-09-01T08:00:00.000")], date(2026, 9, 1), 1, EXTRACTED)
+    stage_collector_run(
+        empty_db, tmp_path, "day-2",
+        [source_row("300", "2026-09-01T08:00:00.000", updated_at="2026-09-11T01:33:00.000Z", status="Closed", closed_date="2026-09-10T10:00:00.000")],
+        date(2026, 9, 1), 1, later,
+    )
+
+    run(empty_db, STAGES)
+    second = run(empty_db, STAGES)
+
+    # The later Observation (Closed) wins; one Current Request, counted once.
+    daily = rows_of(empty_db, "SELECT * FROM APP.OVERVIEW_DAILY")
+    assert daily == [{"created_date": date(2026, 9, 1), "requests": 1, "closed_requests": 1, "open_requests": 0}]
+    [coverage] = rows_of(
+        empty_db, "SELECT observations_loaded, manifest_rows, current_requests, latest_extracted_at FROM APP.DATA_COVERAGE"
+    )
+    assert coverage == {"observations_loaded": 2, "manifest_rows": 2, "current_requests": 1, "latest_extracted_at": later}
+    assert second == {"manifests_loaded": 0, "observations_loaded": 0, "current_requests_merged": 0}
+
+
+def test_dashboard_role_reads_app_views_and_nothing_else(test_env):
+    _, env = test_env
+    with connect(env.dashboard_role, env.warehouse, env.database) as dashboard:
+        cur = dashboard.cursor()
+        cur.execute("SELECT COUNT(*) FROM APP.OVERVIEW_DAILY")
+        cur.execute("SELECT COUNT(*) FROM APP.DATA_COVERAGE")
+        for forbidden in (
+            "SELECT COUNT(*) FROM CLEAN.SERVICE_REQUESTS",
+            "SELECT COUNT(*) FROM RAW.RAW_311_OBSERVATIONS",
+            "SELECT COUNT(*) FROM OPS.RUN_MANIFESTS",
+            "CREATE TABLE APP.SNEAKY (x INT)",
+            "CREATE OR REPLACE VIEW APP.OVERVIEW_DAILY AS SELECT 1 AS x",
+        ):
+            with pytest.raises(ProgrammingError):
+                cur.execute(forbidden)

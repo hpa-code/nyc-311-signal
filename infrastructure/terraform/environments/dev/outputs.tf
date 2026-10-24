@@ -17,3 +17,7 @@ output "socrata_secret_arn" {
 output "snowflake_secret_arn" {
   value = module.core.snowflake_secret_arn
 }
+
+output "snowflake_read_role_arn" {
+  value = module.snowflake_storage_access.role_arn
+}

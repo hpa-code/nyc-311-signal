@@ -13,3 +13,7 @@
 - [ ] ECS accepts inbound traffic only from the ALB; the task reads Snowflake credentials from Secrets Manager; the browser never receives credentials
 - [ ] Read-only dashboard role confirmed: it cannot write or read restricted tables
 - [ ] Health check passes; public URL works
+
+## Comments
+
+**2026-10-23 (agent, from 04):** Locally the dashboard connects as `NYC311_SVC` with role `NYC311_DEV_DASHBOARD`. The same key can also use the pipeline role. For deployment, create a dedicated Snowflake user that holds only the dashboard role, with its own key pair in its own secret.

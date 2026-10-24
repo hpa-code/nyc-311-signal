@@ -1,0 +1,16 @@
+"""NYC 311 Intelligence dashboard.
+
+    uv run --env-file .env streamlit run dashboard/app.py
+"""
+
+import sys
+from pathlib import Path
+
+import streamlit as st
+
+# `streamlit run` puts dashboard/ on the path, not the repo root.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+st.set_page_config(page_title="NYC 311 Intelligence", layout="wide")
+page = st.navigation([st.Page("pages/overview.py", title="Overview", default=True)])
+page.run()
