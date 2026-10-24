@@ -51,11 +51,12 @@ BEGIN
     RETURN OBJECT_CONSTRUCT('outcome', 'waiting');
   END IF;
 
-  -- Inputs include this procedure's own version (its migration checksum), so
-  -- a change to the outputs rebuilds them without waiting for new data.
-  SELECT HASH(r.n, r.loaded, c.n, c.merged, v.n, q.n, m.n, p.checksum) INTO :input_hash
+  -- Inputs include every migration's checksum (this procedure's and the views
+  -- it reads, such as ML.TRAINING_LABELS), so a change to the outputs rebuilds
+  -- them without waiting for new data.
+  SELECT HASH(r.n, r.loaded, c.n, c.merged, v.n, q.n, m.n, p.checksums) INTO :input_hash
   FROM (SELECT COUNT(*) AS n, MAX(loaded_at) AS loaded FROM RAW.RAW_311_OBSERVATIONS) AS r,
-       (SELECT MAX(checksum) AS checksum FROM OPS.SCHEMA_MIGRATIONS WHERE version = 'R__publication') AS p,
+       (SELECT HASH_AGG(version, checksum) AS checksums FROM OPS.SCHEMA_MIGRATIONS) AS p,
        (SELECT COUNT(*) AS n, MAX(merged_at) AS merged FROM CLEAN.SERVICE_REQUESTS) AS c,
        (SELECT COUNT(*) AS n FROM CLEAN.REQUEST_VERSIONS) AS v,
        (SELECT COUNT(*) AS n FROM CLEAN.QUARANTINED_RECORDS) AS q,
@@ -247,6 +248,19 @@ BEGIN
   FROM ANALYTICS.REQUEST_FACTS
   WHERE overdue;
 
+  -- Every Current Request once: NYPD outside the Modeling Cohort, the rest
+  -- with their Label or the reason for none.
+  INSERT INTO ANALYTICS.PUB_LABEL_SUMMARY
+  SELECT :pid, agency, label, no_label_reason, COUNT(*), COUNT_IF(duplicate_closure), COUNT_IF(date_only_closure)
+  FROM (
+    SELECT agency, label, no_label_reason, duplicate_closure, date_only_closure FROM ML.TRAINING_LABELS
+    UNION ALL
+    SELECT COALESCE(agency, 'Unspecified'), NULL, 'outside_modeling_cohort', FALSE, FALSE
+    FROM CLEAN.SERVICE_REQUESTS
+    WHERE unique_key NOT IN (SELECT unique_key FROM ML.MODELING_COHORT)
+  )
+  GROUP BY 2, 3, 4;
+
   -- First stream read in this transaction: if Snowpipe loaded files mid-build,
   -- the coverage counts may include part of a run, so drop them and wait.
   SELECT COUNT(*) INTO :pending_rows FROM (SELECT 1 FROM RAW.NEW_OBSERVATIONS LIMIT 1);
@@ -267,7 +281,10 @@ BEGIN
     'observed_backlog_matches_open_requests', b.open_requests = o.open_requests,
     'geo_cells_count_every_request', g.requests = o.requests,
     'geo_cells_have_at_least_20_requests', g.small_cells = 0,
-    'overdue_requests_are_open', q.n <= o.open_requests
+    'overdue_requests_are_open', q.n <= o.open_requests,
+    'labels_count_every_request', ls.requests = o.requests,
+    'labels_have_a_value_or_a_reason', ls.ambiguous = 0,
+    'modeling_cohort_excludes_nypd', ls.nypd_in_cohort = 0
   ) INTO :checks
   FROM (
     SELECT
@@ -295,6 +312,13 @@ BEGIN
     FROM ANALYTICS.PUB_GEO_CELLS WHERE publication_id = :pid
   ) AS g,
   (SELECT COUNT(*) AS n FROM ANALYTICS.PUB_OVERDUE_QUEUE WHERE publication_id = :pid) AS q,
+  (
+    SELECT
+      COALESCE(SUM(requests), 0) AS requests,
+      COUNT_IF((label IS NULL) = (no_label_reason IS NULL)) AS ambiguous,
+      COUNT_IF(agency = 'NYPD' AND no_label_reason IS DISTINCT FROM 'outside_modeling_cohort') AS nypd_in_cohort
+    FROM ANALYTICS.PUB_LABEL_SUMMARY WHERE publication_id = :pid
+  ) AS ls,
   (SELECT COUNT(*) AS n, COUNT(DISTINCT unique_key) AS distinct_keys FROM CLEAN.SERVICE_REQUESTS) AS cr;
   SELECT BOOLAND_AGG(value::BOOLEAN) INTO :passed FROM TABLE(FLATTEN(input => :checks));
 
@@ -322,6 +346,7 @@ BEGIN
   DELETE FROM ANALYTICS.PUB_DURATION_STATS WHERE publication_id NOT IN (SELECT publication_id FROM OPS.PUBLICATION_KEEP);
   DELETE FROM ANALYTICS.PUB_GEO_CELLS WHERE publication_id NOT IN (SELECT publication_id FROM OPS.PUBLICATION_KEEP);
   DELETE FROM ANALYTICS.PUB_OVERDUE_QUEUE WHERE publication_id NOT IN (SELECT publication_id FROM OPS.PUBLICATION_KEEP);
+  DELETE FROM ANALYTICS.PUB_LABEL_SUMMARY WHERE publication_id NOT IN (SELECT publication_id FROM OPS.PUBLICATION_KEEP);
   COMMIT;
 
   IF (NOT passed) THEN

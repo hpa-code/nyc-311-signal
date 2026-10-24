@@ -70,6 +70,9 @@ A Label whose outcome was knowable at a given point in time.
 A Closure recorded with a date but no meaningful time of day. Judged by calendar day; one falling on the same day as the Seven-Day Horizon yields no Label.
 _Avoid_: Midnight closure
 
+**Duplicate Closure**:
+A Closure recording that the Service Request duplicates another one, whether or not the original is still open. Labeled like any other Closure: one after the Seven-Day Horizon is Delayed.
+
 **Reopened Request**:
 A Service Request observed Closed and later observed open again. Treated as an exception and excluded from training.
 
