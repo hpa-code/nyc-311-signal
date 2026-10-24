@@ -32,3 +32,10 @@ Processing (`snowflake/transformations/process/01–04`) runs as one transaction
   - A stream's first read (SHOW_INITIAL_ROWS) returns only the rows present at its creation, so rows loaded after V006 are processed one run later.
   - A replay that carries an earlier extraction time moves First Observed earlier, which is correct for true replays.
 - The spec-axis review was still pending at commit time; its fixes follow in a separate commit.
+
+**2026-10-24 (agent): spec-review fixes, migration V007.**
+- Versions are now computed exactly from `CLEAN.OBSERVATION_POINTS`, which holds each distinct (key, hash, `:updated_at`, extraction time) point, deduplicated so that replays and overlaps add nothing. This replaces the first/last-point approximation, which got the start points and counts wrong when a late split happened.
+- Current Request provenance (`run_id`, `source_file`) comes from the latest version's last point.
+- No Observation can fail processing or COPY any more: only `AS_VARCHAR`/`IS_VARCHAR` reads are used, and there are new `incompatible_*` reasons. Dates must match the source format, so epoch-looking text is invalid.
+- Seam 2 covers object, array and epoch values, and a wrong-typed envelope field; the replay test asserts that distinct Observations are unchanged.
+- Dev after V007: 71,830 Observations = distinct Observations = versions = Current Requests.

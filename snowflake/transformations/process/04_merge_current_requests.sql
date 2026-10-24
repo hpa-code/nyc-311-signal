@@ -1,5 +1,6 @@
--- Current Request = the latest Request Version. The guard means an older
--- version can never replace a newer Current Request, whatever arrives when.
+-- Current Request = the latest Request Version, with the provenance of its
+-- last Observation point. The guard means an older version can never replace
+-- a newer Current Request, whatever arrives when.
 MERGE INTO CLEAN.SERVICE_REQUESTS AS t
 USING (
   SELECT
@@ -18,11 +19,11 @@ USING (
     v.last_seen_updated_at                                                  AS source_updated_at,
     v.last_seen_extracted_at                                                AS extracted_at,
     v.payload_hash,
-    v.run_id,
-    v.source_file,
+    v.last_seen_run_id                                                      AS run_id,
+    v.last_seen_source_file                                                 AS source_file,
     MIN(v.first_extracted_at) OVER (PARTITION BY v.unique_key)              AS first_observed_at
   FROM CLEAN.REQUEST_VERSIONS AS v
-  WHERE v.unique_key IN (SELECT unique_key FROM CLEAN.WORK_VERSION_CANDIDATES)
+  WHERE v.unique_key IN (SELECT unique_key FROM CLEAN.WORK_AFFECTED_REQUESTS)
   QUALIFY ROW_NUMBER() OVER (
     PARTITION BY v.unique_key
     ORDER BY v.last_seen_updated_at DESC, v.last_seen_extracted_at DESC, v.payload_hash DESC

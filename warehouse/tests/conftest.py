@@ -50,7 +50,7 @@ def empty_db(test_env):
     cur = conn.cursor()
     for table in (
         "RAW.RAW_311_OBSERVATIONS", "OPS.RUN_MANIFESTS", "CLEAN.SERVICE_REQUESTS",
-        "CLEAN.REQUEST_VERSIONS", "CLEAN.QUARANTINED_RECORDS",
+        "CLEAN.REQUEST_VERSIONS", "CLEAN.QUARANTINED_RECORDS", "CLEAN.OBSERVATION_POINTS",
     ):
         cur.execute(f"TRUNCATE TABLE {table}")
     cur.execute(f"REMOVE @{FIXTURE_STAGE}")

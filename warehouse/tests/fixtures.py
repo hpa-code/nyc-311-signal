@@ -1,12 +1,14 @@
 """Builders for Seam 2: fixture Observation files made by the real collector."""
 
+import gzip
+import json
 from datetime import date, datetime, timezone
 from pathlib import Path
 
 from snowflake.connector import SnowflakeConnection
 
 from ingestion.api_client import SourceClient
-from ingestion.collector import Collector, Plan, creation_day_partitions
+from ingestion.collector import Collector, Plan, creation_day_partitions, wrap_observation
 from ingestion.object_store import LocalObjectStore
 from ingestion.tests.fake_socrata import FakeSocrata
 from warehouse.pipeline import Stages
@@ -54,29 +56,15 @@ def stage_collector_run(
 def observation(
     row: dict, run_id: str, extracted_at: datetime, *, updated_at: str | None = "2026-09-08T01:33:26.619Z"
 ) -> dict:
-    """One Observation line as the collector writes it, built by hand so tests can
-    also produce malformed ones the collector would refuse to write."""
-    import hashlib
-    import json
-
-    canonical = json.dumps(row, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
-    return {
-        "run_id": run_id,
-        "extracted_at": extracted_at.strftime("%Y-%m-%dT%H:%M:%SZ"),
-        "source_dataset": "erm2-nwe9",
-        "schema_version": 1,
-        "payload_hash": hashlib.sha256(canonical.encode()).hexdigest(),
-        "source_created_at": "2026-09-02T01:33:26.674Z",
-        "source_updated_at": updated_at,
-        "payload": row,
-    }
+    """One Observation line as the collector writes it. Tests may then break it
+    in ways the collector itself would refuse to."""
+    system = {":created_at": "2026-09-02T01:33:26.674Z", ":updated_at": updated_at}
+    wrapped = wrap_observation({**row, **system}, run_id, extracted_at)
+    return {**wrapped, "source_updated_at": updated_at}
 
 
 def stage_observation_file(conn: SnowflakeConnection, tmp_path: Path, name: str, observations: list[dict]) -> None:
     """PUT one gzip NDJSON data file (no manifest) to the fixture stage."""
-    import gzip
-    import json
-
     path = tmp_path / f"{name}.ndjson.gz"
     lines = "".join(json.dumps(o) + "\n" for o in observations)
     path.write_bytes(gzip.compress(lines.encode(), mtime=0))

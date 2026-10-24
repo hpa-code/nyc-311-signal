@@ -25,7 +25,8 @@ def overview(conn) -> list[tuple]:
 def coverage(conn) -> dict:
     [row] = rows_of(
         conn,
-        "SELECT observations_loaded, request_versions, current_requests, quarantined_observations FROM APP.DATA_COVERAGE",
+        "SELECT observations_loaded, distinct_observations, request_versions, current_requests, quarantined_observations"
+        " FROM APP.DATA_COVERAGE",
     )
     return row
 
@@ -38,7 +39,8 @@ def test_overlapping_duplicates_collapse_into_one_request_version(empty_db, tmp_
     run(empty_db, STAGES)
 
     assert coverage(empty_db) == {
-        "observations_loaded": 2, "request_versions": 1, "current_requests": 1, "quarantined_observations": 0,
+        "observations_loaded": 2, "distinct_observations": 2, "request_versions": 1, "current_requests": 1,
+        "quarantined_observations": 0,
     }
     assert overview(empty_db) == [(date(2026, 9, 1), 1, 0, 1)]
 
@@ -67,6 +69,7 @@ def test_replaying_an_old_observation_leaves_the_current_request_and_versions_un
     assert overview(empty_db) == [(date(2026, 9, 1), 1, 1, 0)]
     after = coverage(empty_db)
     assert after["request_versions"] == before["request_versions"] == 2
+    assert after["distinct_observations"] == before["distinct_observations"] == 2  # the replay adds nothing
     assert after["observations_loaded"] == 3
 
 
@@ -96,24 +99,32 @@ def test_malformed_observations_are_quarantined_with_reasons_and_the_rest_still_
         observation(payload("605"), "run-1", DAY_1, updated_at=None),                                # no :updated_at
         {**observation(payload("606"), "run-1", DAY_1, updated_at=T1), "extracted_at": "soon"},     # bad extraction time
         {**observation(payload("607"), "run-1", DAY_1, updated_at=T1), "payload": "not an object"},
+        observation(payload("608", created={"date": "2026-09-01"}), "run-1", DAY_1, updated_at=T1),  # object, not text
+        observation(payload("609", created="1693526400"), "run-1", DAY_1, updated_at=T1),            # epoch-looking text
+        observation(payload("610", closed_date=["2026-09-02"]), "run-1", DAY_1, updated_at=T1),      # array, not text
+        observation(payload(["611"]), "run-1", DAY_1, updated_at=T1),                                # array key
     ]
-    stage_observation_file(empty_db, tmp_path, "mixed", [good, *bad])
+    # Envelope fields of the wrong type load as NULL instead of failing the file.
+    odd_envelope = {**observation(payload("612"), "run-1", DAY_1, updated_at=T1), "run_id": {"not": "text"}}
+    stage_observation_file(empty_db, tmp_path, "mixed", [good, odd_envelope, *bad])
 
     run(empty_db, STAGES)
 
-    assert overview(empty_db) == [(date(2026, 9, 1), 1, 0, 1)]
+    assert overview(empty_db) == [(date(2026, 9, 1), 2, 0, 2)]
     summary = {r["reason"]: r["observations"] for r in rows_of(empty_db, "SELECT * FROM APP.QUARANTINE_SUMMARY")}
     assert summary == {
         "missing_unique_key": 2,  # the non-object payload has no unique_key either
-        "invalid_created_date": 1,
+        "invalid_created_date": 2,
+        "incompatible_created_date": 1,
         "missing_created_date": 2,
-        "incompatible_unique_key": 1,
+        "incompatible_unique_key": 2,
         "invalid_closed_date": 1,
+        "incompatible_closed_date": 1,
         "missing_source_updated_at": 1,
         "invalid_extracted_at": 1,
         "incompatible_payload": 1,
     }
-    assert coverage(empty_db)["quarantined_observations"] == 8
+    assert coverage(empty_db)["quarantined_observations"] == 12
 
 
 def test_unknown_and_missing_problems_are_kept(empty_db, tmp_path):

@@ -14,3 +14,7 @@
 - [ ] Risk Queue shows only Request ID, Problem, agency, borough, created date and Admission Score, with a note that predicted delay is not urgency
 - [ ] Request lookup shows selected fields, observation freshness and score provenance
 - [ ] Seam 2 test: scoring idempotency
+
+## Comments
+
+**2026-10-24 (agent, from 05):** `CLEAN.SERVICE_REQUESTS.first_observed_at` is the minimum extraction time over all Observations. A true replay that carries an earlier original extraction can move it earlier. Admission scoring must snapshot First Observed (and the 72-hour eligibility decision) when it scores, and never re-derive it later. The Request lookup can show versions and provenance from `CLEAN.REQUEST_VERSIONS`, whose valid_from_* and last_seen_* columns include run and file.

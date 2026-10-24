@@ -30,12 +30,12 @@ def run(conn: SnowflakeConnection, stages: Stages = Stages()) -> dict[str, int]:
     return counts | _process(conn)
 
 
-PROCESS_STEPS = [
-    "transformations/process/01_take_new_observations.sql",
-    "transformations/process/02_quarantine.sql",
-    "transformations/process/03_request_versions.sql",
-    "transformations/process/04_merge_current_requests.sql",
-]
+PROCESS_STEPS = {
+    "take_new_observations": "transformations/process/01_take_new_observations.sql",
+    "quarantine": "transformations/process/02_quarantine.sql",
+    "request_versions": "transformations/process/03_request_versions.sql",
+    "merge_current_requests": "transformations/process/04_merge_current_requests.sql",
+}
 
 
 def _process(conn: SnowflakeConnection) -> dict[str, int]:
@@ -43,15 +43,18 @@ def _process(conn: SnowflakeConnection) -> dict[str, int]:
     cur = conn.cursor()
     cur.execute("BEGIN")
     try:
-        results = [list(conn.execute_string(read(step))) for step in PROCESS_STEPS]
+        # Each step's last statement is the one whose result we report.
+        last = {name: list(conn.execute_string(read(path)))[-1] for name, path in PROCESS_STEPS.items()}
         cur.execute("COMMIT")
     except Exception:
         cur.execute("ROLLBACK")
         raise
-    quarantined = results[1][-1].rowcount or 0
-    merge = results[3][-1].fetchone()
+    merge = last["merge_current_requests"].fetchone()
     assert isinstance(merge, tuple)
-    return {"observations_quarantined": int(quarantined), "current_requests_merged": int(merge[0]) + int(merge[1])}
+    return {
+        "observations_quarantined": int(last["quarantine"].rowcount or 0),
+        "current_requests_merged": int(merge[0]) + int(merge[1]),
+    }
 
 
 def _copy(conn: SnowflakeConnection, sql: str) -> int:
