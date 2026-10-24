@@ -13,6 +13,7 @@
 - [ ] Each score is stored with request, model and feature versions, cutoff, scoring time and publication ID; retries are idempotent; scores are never recomputed
 - [ ] Risk Queue shows only Request ID, Problem, agency, borough, created date and Admission Score, with a note that predicted delay is not urgency
 - [ ] Request lookup shows selected fields, observation freshness and score provenance
+- [ ] Scores are a `PUB_*` output of each Publication (`R__publication.sql`), with a check; a Publication never fills in missing scores (from ticket 07)
 - [ ] Seam 2 test: scoring idempotency
 
 ## Comments

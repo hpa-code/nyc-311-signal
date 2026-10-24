@@ -9,6 +9,9 @@
 --   5. Fail (after committing) if any run has waited more than 6 hours, or a
 --      pending file has had no reconciled run for 6 hours, so the task's
 --      failure surfaces a stuck pipeline instead of waiting silently.
+--   6. Record success or failure in OPS.STEP_STATUS for the dashboard.
+-- The transaction holds the pipeline lock, so OPS.PUBLISH never builds from
+-- a half-merged state.
 -- Inside the transaction the stream is read at one snapshot (repeatable
 -- read), taken after RAW was counted, so the check and the processing see
 -- the same rows.
@@ -26,11 +29,13 @@ DECLARE
   ready_runs NUMBER;
   ready_run_ids ARRAY;
   result VARIANT;
+  err STRING;
   stuck EXCEPTION (-20001, 'Readiness: a run has waited more than 6 hours. See OPS.PIPELINE_RUNS (state waiting) and RAW.NEW_OBSERVATIONS.');
 BEGIN
   {{include:transformations/load_manifests.sql}}
 
   BEGIN TRANSACTION;
+  {{include:transformations/take_pipeline_lock.sql}}
 
   MERGE INTO OPS.PIPELINE_RUNS AS r
   USING OPS.RUN_MANIFESTS AS m
@@ -137,10 +142,13 @@ BEGIN
   IF (stale_runs > 0 OR stale_blocked_files > 0) THEN
     RAISE stuck;
   END IF;
+  UPDATE OPS.STEP_STATUS SET last_success_at = CURRENT_TIMESTAMP() WHERE step = 'readiness';
   RETURN result;
 EXCEPTION
   WHEN OTHER THEN
     ROLLBACK;
+    err := SQLERRM;
+    UPDATE OPS.STEP_STATUS SET last_failure_at = CURRENT_TIMESTAMP(), last_error = :err WHERE step = 'readiness';
     RAISE;
 END;
 $$;

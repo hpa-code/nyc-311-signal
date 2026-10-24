@@ -60,5 +60,6 @@ def empty_db(test_env):
         "ANALYTICS.PUB_TABLEAU_DAILY",
     ):
         cur.execute(f"TRUNCATE TABLE {table}")
+    cur.execute("UPDATE OPS.STEP_STATUS SET last_success_at = NULL, last_failure_at = NULL, last_error = NULL")
     cur.execute(f"REMOVE @{FIXTURE_STAGE}")
     return conn

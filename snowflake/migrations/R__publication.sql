@@ -4,10 +4,13 @@
 -- readiness check; see R__readiness.sql).
 --   1. Wait (publish nothing) while a run is in flight: Observations not yet
 --      processed, or a run still waiting to reconcile.
---   2. Skip if nothing changed since the latest attempt.
---   3. In one transaction: build every output under a new publication_id,
---      run the checks, and move the current-Publication pointer only if all
---      pass. A failed check records the attempt as held and keeps the pointer.
+--   2. Skip if the latest attempt was published from the same inputs. After a
+--      held or failed attempt it always rebuilds, so a fix to the data or to
+--      this procedure is picked up without waiting for new data.
+--   3. In one transaction, holding the pipeline lock so no merge can run
+--      meanwhile: build every output under a new publication_id, run the
+--      checks, and move the current-Publication pointer only if all pass. A
+--      failed check records the attempt as held and keeps the pointer.
 --   4. Fail (after committing) when held, so the task's failure is the alert.
 -- An error mid-build rolls everything back and records the attempt as failed.
 CREATE OR REPLACE PROCEDURE OPS.PUBLISH()
@@ -20,7 +23,7 @@ DECLARE
   pid STRING;
   pending_rows NUMBER;
   waiting_runs NUMBER;
-  inputs NUMBER;
+  input_hash NUMBER;
   latest_hash NUMBER;
   latest_state STRING;
   checks VARIANT;
@@ -28,13 +31,24 @@ DECLARE
   err STRING;
   held EXCEPTION (-20002, 'Publication held: a check failed. See OPS.PUBLICATIONS.checks; the dashboard keeps the previous Publication.');
 BEGIN
+  -- Cheap early exit; the stream is checked again, inside the transaction, after the build.
   SELECT COUNT(*) INTO :pending_rows FROM (SELECT 1 FROM RAW.NEW_OBSERVATIONS LIMIT 1);
-  SELECT COUNT(*) INTO :waiting_runs FROM OPS.PIPELINE_RUNS WHERE state = 'waiting';
-  IF (pending_rows > 0 OR waiting_runs > 0) THEN
+  IF (pending_rows > 0) THEN
     RETURN OBJECT_CONSTRUCT('outcome', 'waiting');
   END IF;
 
-  SELECT HASH(r.n, r.loaded, c.n, c.merged, v.n, q.n, m.n) INTO :inputs
+  SELECT TO_CHAR(SYSDATE(), 'YYYYMMDD"T"HH24MISS') || '-' || LEFT(UUID_STRING(), 8) INTO :pid;
+
+  BEGIN TRANSACTION;
+  {{include:transformations/take_pipeline_lock.sql}}
+
+  SELECT COUNT(*) INTO :waiting_runs FROM OPS.PIPELINE_RUNS WHERE state = 'waiting';
+  IF (waiting_runs > 0) THEN
+    ROLLBACK;
+    RETURN OBJECT_CONSTRUCT('outcome', 'waiting');
+  END IF;
+
+  SELECT HASH(r.n, r.loaded, c.n, c.merged, v.n, q.n, m.n) INTO :input_hash
   FROM (SELECT COUNT(*) AS n, MAX(loaded_at) AS loaded FROM RAW.RAW_311_OBSERVATIONS) AS r,
        (SELECT COUNT(*) AS n, MAX(merged_at) AS merged FROM CLEAN.SERVICE_REQUESTS) AS c,
        (SELECT COUNT(*) AS n FROM CLEAN.REQUEST_VERSIONS) AS v,
@@ -42,18 +56,13 @@ BEGIN
        (SELECT COUNT(*) AS n FROM OPS.RUN_MANIFESTS) AS m;
   SELECT MAX_BY(input_hash, started_at), MAX_BY(state, started_at) INTO :latest_hash, :latest_state
   FROM OPS.PUBLICATIONS;
-  IF (latest_hash = inputs) THEN
-    IF (latest_state = 'published') THEN
-      RETURN OBJECT_CONSTRUCT('outcome', 'unchanged');
-    END IF;
-    RAISE held;
+  IF (latest_hash = input_hash AND latest_state = 'published') THEN
+    ROLLBACK;
+    RETURN OBJECT_CONSTRUCT('outcome', 'unchanged');
   END IF;
 
-  SELECT TO_CHAR(SYSDATE(), 'YYYYMMDD"T"HH24MISS') || '-' || LEFT(UUID_STRING(), 8) INTO :pid;
-
-  BEGIN TRANSACTION;
   INSERT INTO OPS.PUBLICATIONS (publication_id, state, started_at, input_hash)
-  VALUES (:pid, 'building', CURRENT_TIMESTAMP(), :inputs);
+  VALUES (:pid, 'building', CURRENT_TIMESTAMP(), :input_hash);
 
   INSERT INTO ANALYTICS.PUB_OVERVIEW_DAILY
   SELECT
@@ -119,8 +128,8 @@ BEGIN
   FROM CLEAN.SERVICE_REQUESTS
   GROUP BY 2, 3, 4, 5, 6;
 
-  -- First stream read in this transaction: if a load landed mid-build, the
-  -- outputs may include part of a run, so drop them and wait.
+  -- First stream read in this transaction: if Snowpipe loaded files mid-build,
+  -- the coverage counts may include part of a run, so drop them and wait.
   SELECT COUNT(*) INTO :pending_rows FROM (SELECT 1 FROM RAW.NEW_OBSERVATIONS LIMIT 1);
   IF (pending_rows > 0) THEN
     ROLLBACK;

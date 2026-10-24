@@ -65,10 +65,12 @@ PROCESS_STEPS = {
 
 
 def _process(conn: SnowflakeConnection) -> dict[str, int]:
-    """All-or-nothing: the stream offset only advances if every step commits."""
+    """All-or-nothing: the stream offset only advances if every step commits.
+    Holds the pipeline lock, like the readiness procedure, so publishing waits."""
     cur = conn.cursor()
     cur.execute("BEGIN")
     try:
+        conn.execute_string(read("transformations/take_pipeline_lock.sql"))
         # Each step's last statement is the one whose result we report.
         last = {name: list(conn.execute_string(read(path)))[-1] for name, path in PROCESS_STEPS.items()}
         cur.execute("COMMIT")

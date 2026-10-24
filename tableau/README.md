@@ -13,9 +13,9 @@ Writes two files to `tableau/out/` (git-ignored):
 | File | Grain | Columns |
 |---|---|---|
 | `nyc311_daily.csv` | creation day × borough × agency × Problem × channel | `created_date`, `borough`, `agency`, `problem`, `channel`, `requests`, `closed_requests`, `open_requests` |
-| `nyc311_coverage.csv` | one row | `first_created_date`, `last_created_date`, `current_requests`, `latest_extracted_at_new_york` |
+| `nyc311_coverage.csv` | one row | `publication_id`, `first_created_date`, `last_created_date`, `current_requests`, `latest_extracted_at_new_york` |
 
-Every measure is a count, so `SUM` is always correct. Open means not yet Closed as of the latest Observation. It is not Overdue.
+Both files come from the current Publication (ticket 07), so they always agree. Every measure is a count, so `SUM` is always correct. Open means not yet Closed as of the latest Observation. It is not Overdue.
 
 ## 2. Set up Tableau Public
 

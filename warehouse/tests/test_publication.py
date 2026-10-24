@@ -9,7 +9,7 @@ from snowflake.connector.errors import ProgrammingError
 
 from warehouse.pipeline import process_ready_runs, publish, run
 from warehouse.tests.fixtures import STAGES, load_observation_files, put_collected, source_row, stage_collector_run
-from warehouse.tests.test_readiness import data_keys, manifest_key, overview, two_file_run
+from warehouse.tests.test_readiness import data_keys, manifest_key, overview, readiness, two_file_run
 from warehouse.tests.test_warehouse import rows_of
 
 
@@ -44,7 +44,7 @@ def test_a_failed_check_holds_and_the_previous_publication_stays_visible(empty_d
 
     with pytest.raises(ProgrammingError, match="Publication held"):
         publish(empty_db)
-    # Asking again changes nothing and still fails.
+    # Asking again rebuilds (a fix may have landed) and, still broken, holds again.
     with pytest.raises(ProgrammingError, match="Publication held"):
         publish(empty_db)
 
@@ -53,9 +53,14 @@ def test_a_failed_check_holds_and_the_previous_publication_stays_visible(empty_d
     assert (held["latest_attempt_state"], held["stale"]) == ("held", True)
     assert held["stale_reason"] == "the latest Publication attempt failed its checks"
     assert overview(empty_db) == [(date(2026, 9, 1), 1, 0)]
-    [checks] = rows_of(empty_db, "SELECT checks FROM OPS.PUBLICATIONS WHERE state = 'held'")
-    failed = [name for name, passed in json.loads(checks["checks"]).items() if not passed]
-    assert failed == ["one_current_request_per_unique_key"]
+    held_checks = rows_of(empty_db, "SELECT checks FROM OPS.PUBLICATIONS WHERE state = 'held'")
+    assert len(held_checks) == 2
+    for row in held_checks:
+        assert [name for name, passed in json.loads(row["checks"]).items() if not passed] == ["one_current_request_per_unique_key"]
+    # A held Publication is never readable by ID either.
+    assert rows_of(empty_db, "SELECT DISTINCT publication_id FROM APP.PUBLISHED_OVERVIEW_DAILY") == [
+        {"publication_id": previous["publication_id"]}
+    ]
 
     # Once fixed, the next publish succeeds and the warning clears.
     empty_db.cursor().execute("INSERT OVERWRITE INTO CLEAN.SERVICE_REQUESTS SELECT DISTINCT * FROM CLEAN.SERVICE_REQUESTS")
@@ -63,6 +68,12 @@ def test_a_failed_check_holds_and_the_previous_publication_stays_visible(empty_d
     recovered = status(empty_db)
     assert recovered["publication_id"] != previous["publication_id"]
     assert (recovered["latest_attempt_state"], recovered["stale"]) == ("published", False)
+    # A reader that took the previous ID before the pointer moved still reads it whole.
+    by_id = rows_of(
+        empty_db,
+        f"SELECT current_requests FROM APP.PUBLISHED_DATA_COVERAGE WHERE publication_id = '{previous['publication_id']}'",
+    )
+    assert by_id == [{"current_requests": 1}]
 
 
 def test_a_partial_run_never_becomes_the_current_publication(empty_db, tmp_path):
@@ -86,3 +97,27 @@ def test_old_data_is_published_but_flagged_stale(empty_db, tmp_path):
 
     old = status(empty_db)
     assert (old["latest_attempt_state"], old["stale"], old["stale_reason"]) == ("published", True, "the data is more than 36 hours old")
+
+
+def test_a_failed_readiness_check_flags_the_publication_stale_until_one_succeeds(empty_db, tmp_path):
+    publish_one_request(empty_db, tmp_path, "940")
+    bucket, manifest = two_file_run(tmp_path)
+    first, second = data_keys(manifest)
+    put_collected(empty_db, bucket, "data", [first])
+    load_observation_files(empty_db)
+    put_collected(empty_db, bucket, "manifests", [manifest_key(manifest)])
+    readiness(empty_db)
+    empty_db.cursor().execute("UPDATE OPS.PIPELINE_RUNS SET first_seen_at = DATEADD(hour, -7, first_seen_at)")
+
+    with pytest.raises(ProgrammingError, match="waited more than 6 hours"):
+        readiness(empty_db)
+
+    assert status(empty_db)["stale_reason"] == (
+        "the latest readiness check failed; a collector run has waited more than 6 hours to load"
+    )
+
+    put_collected(empty_db, bucket, "data", [second])
+    load_observation_files(empty_db)
+    assert readiness(empty_db)["outcome"] == "processed"
+    fresh = status(empty_db)
+    assert (fresh["latest_attempt_state"], fresh["stale"]) == ("published", False)

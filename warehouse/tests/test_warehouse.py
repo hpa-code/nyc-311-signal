@@ -77,11 +77,14 @@ def test_dashboard_role_reads_app_views_and_nothing_else(test_env):
         cur.execute("SELECT COUNT(*) FROM APP.DATA_COVERAGE")
         cur.execute("SELECT COUNT(*) FROM APP.TABLEAU_DAILY")
         cur.execute("SELECT COUNT(*) FROM APP.PUBLICATION_STATUS")
+        for view in ("PUBLISHED_OVERVIEW_DAILY", "PUBLISHED_DATA_COVERAGE", "PUBLISHED_TABLEAU_DAILY"):
+            cur.execute(f"SELECT COUNT(*) FROM APP.{view}")
         for forbidden in (
             "SELECT COUNT(*) FROM CLEAN.SERVICE_REQUESTS",
             "SELECT COUNT(*) FROM RAW.RAW_311_OBSERVATIONS",
             "SELECT COUNT(*) FROM OPS.RUN_MANIFESTS",
             "SELECT COUNT(*) FROM OPS.PUBLICATIONS",
+            "SELECT COUNT(*) FROM OPS.STEP_STATUS",
             "SELECT COUNT(*) FROM ANALYTICS.PUB_OVERVIEW_DAILY",
             "CREATE TABLE APP.SNEAKY (x INT)",
             "CREATE OR REPLACE VIEW APP.OVERVIEW_DAILY AS SELECT 1 AS x",

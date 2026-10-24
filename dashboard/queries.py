@@ -21,9 +21,9 @@ def _connection() -> SnowflakeConnection:
     return connect(ENV.dashboard_role, ENV.warehouse, ENV.database, statement_timeout_seconds=60)
 
 
-def _frame(sql: str) -> pd.DataFrame:
+def _frame(sql: str, params: tuple = ()) -> pd.DataFrame:
     cur = _connection().cursor()
-    cur.execute(sql)
+    cur.execute(sql, params)
     frame = cur.fetch_pandas_all()
     frame.columns = [c.lower() for c in frame.columns]
     return frame
@@ -34,15 +34,17 @@ def publication_status() -> pd.Series:
     return _frame("SELECT * FROM APP.PUBLICATION_STATUS").iloc[0]
 
 
-# publication_id is the cache key: APP views always show the current Publication.
+# Read by ID, not from the current-Publication views, so every page reads one
+# Publication even if the pointer moves between queries.
 @st.cache_data(max_entries=2)
 def overview_daily(publication_id: str) -> pd.DataFrame:
     return _frame(
         "SELECT created_date, requests, closed_requests, open_requests"
-        " FROM APP.OVERVIEW_DAILY ORDER BY created_date"
+        " FROM APP.PUBLISHED_OVERVIEW_DAILY WHERE publication_id = %s ORDER BY created_date",
+        (publication_id,),
     )
 
 
 @st.cache_data(max_entries=2)
 def data_coverage(publication_id: str) -> pd.Series:
-    return _frame("SELECT * FROM APP.DATA_COVERAGE").iloc[0]
+    return _frame("SELECT * FROM APP.PUBLISHED_DATA_COVERAGE WHERE publication_id = %s", (publication_id,)).iloc[0]
