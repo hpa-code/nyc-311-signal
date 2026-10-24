@@ -32,3 +32,23 @@ def test_put_replaces_mutable_control_files(store):
     store.put("checkpoints/runs/r/run.json", b"v1")
     store.put("checkpoints/runs/r/run.json", b"v2")
     assert store.get("checkpoints/runs/r/run.json") == b"v2"
+
+
+def test_replace_if_match_swaps_only_from_the_version_read(store):
+    store.put("checkpoints/leases/l.json", b"v1")
+    versioned = store.get_versioned("checkpoints/leases/l.json")
+    assert versioned is not None
+    data, etag = versioned
+    assert data == b"v1"
+
+    new_etag = store.replace_if_match("checkpoints/leases/l.json", b"v2", etag)
+    assert new_etag is not None and new_etag != etag
+    # A second writer still holding the old version loses.
+    assert store.replace_if_match("checkpoints/leases/l.json", b"v3", etag) is None
+    assert store.get_versioned("checkpoints/leases/l.json") == (b"v2", new_etag)
+
+
+def test_replace_if_match_never_creates(store):
+    assert store.get_versioned("checkpoints/leases/none.json") is None
+    assert store.replace_if_match("checkpoints/leases/none.json", b"v1", '"anything"') is None
+    assert store.get("checkpoints/leases/none.json") is None

@@ -26,3 +26,18 @@ aws secretsmanager put-secret-value --region us-east-2 \
   --secret-id dev/nyc311/snowflake-service-user \
   --secret-string file://$HOME/nyc311-snowflake-secret.json   # {"account","user","private_key"}; keep outside the repo
 ```
+
+## Daily collector
+
+`modules/daily_collector` packages `ingestion/*.py` into a Lambda (`dev-nyc311-collector`), which EventBridge Scheduler starts daily at 06:00 UTC. A failed invocation, or none for 24 hours, raises a CloudWatch alarm on the `dev-nyc311-alerts` SNS topic. The alert email comes from `alert_email` in `terraform.tfvars` (gitignored). AWS emails a confirmation link the first time.
+
+The first pass starts from `initial_cursor`. After that, the cursor lives in the bucket at `checkpoints/cursor/311.json`. To run a pass by hand:
+
+```sh
+aws lambda invoke --region us-east-2 --function-name dev-nyc311-collector \
+  --invocation-type Event --payload '{}' /dev/null
+```
+
+## Snowpipe notifications
+
+New objects under `data/` notify the Snowpipe `RAW.OBSERVATIONS_PIPE`. Its SQS queue ARN comes from `SHOW PIPES IN DATABASE NYC311_DEV` (`notification_channel`) and is set as `snowpipe_queue_arn` in `environments/dev/main.tf`. The queue is owned by Snowflake, one per Snowflake account, so a recreated pipe usually keeps the same ARN.

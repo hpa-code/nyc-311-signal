@@ -220,6 +220,12 @@ class CrashOnCheckpointStore:
     def put_if_absent(self, key, data):
         return self._inner.put_if_absent(key, data)
 
+    def get_versioned(self, key):
+        return self._inner.get_versioned(key)
+
+    def replace_if_match(self, key, data, etag):
+        return self._inner.replace_if_match(key, data, etag)
+
     def put(self, key, data):
         if "/partitions/" in key:
             self._remaining -= 1

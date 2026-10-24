@@ -28,3 +28,6 @@ data/raw/
 .DS_Store
 .idea/
 .vscode/
+
+# Lambda bundles built by Terraform
+infrastructure/terraform/modules/*/build/

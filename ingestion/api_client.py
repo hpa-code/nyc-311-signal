@@ -73,12 +73,47 @@ class CreationWindow:
     start: datetime
     end: datetime
 
+    order = ("created_date", "unique_key")
+
     @property
     def id(self) -> str:
         return f"created-{self.start:%Y%m%dT%H%M}-{self.end:%Y%m%dT%H%M}"
 
+    @property
+    def bounds(self) -> dict:
+        return {"created_from": self.start.isoformat(), "created_before": self.end.isoformat()}
 
-# Keyset position: (created_date, unique_key) of the last row already taken.
+    def where(self) -> str:
+        return f"created_date >= {_timestamp_literal(self.start)} AND created_date < {_timestamp_literal(self.end)}"
+
+
+@dataclass(frozen=True)
+class UpdateWindow:
+    """Requests created on or after `created_from` (NYC local) whose `:updated_at`
+    is after `updated_after` (a source `:updated_at` value, UTC). Open-ended: a
+    Request republished during the pass moves later in the order and is still reached."""
+
+    updated_after: str
+    created_from: datetime
+
+    order = (":updated_at", "unique_key")
+
+    @property
+    def id(self) -> str:
+        return f"updated-after-{self.updated_after.replace('-', '').replace(':', '')}"
+
+    @property
+    def bounds(self) -> dict:
+        return {"updated_after": self.updated_after, "created_from": self.created_from.isoformat()}
+
+    def where(self) -> str:
+        return f":updated_at > {_quote(self.updated_after)} AND created_date >= {_timestamp_literal(self.created_from)}"
+
+
+Window = CreationWindow | UpdateWindow
+
+# Keyset position: the window's order fields of the last row already taken,
+# e.g. (created_date, unique_key) or (:updated_at, unique_key).
 PageCursor = tuple[str, str]
 
 
@@ -101,20 +136,20 @@ class SourceClient:
         self._backoff_base = backoff_base
         self._backoff_cap = backoff_cap
 
-    def fetch_created_page(self, window: CreationWindow, after: PageCursor | None, limit: int) -> list[dict]:
-        """One page of Requests created in `window`, ordered by (created_date, unique_key), after `after`."""
-        where = _window_where(window)
+    def fetch_page(self, window: Window, after: PageCursor | None, limit: int) -> list[dict]:
+        """One page of the window's Requests in its stable order, after the keyset position `after`."""
+        where = window.where()
         if after is not None:
-            created, key = after
+            (first, key), (first_value, key_value) = window.order, after
             where += (
-                f" AND (created_date > {_quote(created)}"
-                f" OR (created_date = {_quote(created)} AND unique_key > {_quote(key)}))"
+                f" AND ({first} > {_quote(first_value)}"
+                f" OR ({first} = {_quote(first_value)} AND {key} > {_quote(key_value)}))"
             )
         rows = self._get(
             {
                 "$select": ":*, *",
                 "$where": where,
-                "$order": "created_date, unique_key",
+                "$order": ", ".join(window.order),
                 "$limit": str(limit),
             }
         )
@@ -127,7 +162,7 @@ class SourceClient:
         return rows
 
     def count_created(self, window: CreationWindow) -> int:
-        rows = self._get({"$select": "count(*)", "$where": _window_where(window)})
+        rows = self._get({"$select": "count(*)", "$where": window.where()})
         return int(rows[0]["count"])
 
     def _get(self, params: dict) -> list[dict]:
@@ -173,10 +208,6 @@ def _retry_after(response: Response) -> float:
         return float(value)
     except ValueError:
         return 0.0
-
-
-def _window_where(window: CreationWindow) -> str:
-    return f"created_date >= {_timestamp_literal(window.start)} AND created_date < {_timestamp_literal(window.end)}"
 
 
 def _timestamp_literal(value: datetime) -> str:

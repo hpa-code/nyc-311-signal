@@ -8,10 +8,11 @@ from pathlib import Path
 from snowflake.connector import SnowflakeConnection
 
 from ingestion.api_client import SourceClient
-from ingestion.collector import Collector, Plan, creation_day_partitions, wrap_observation
+from ingestion.collector import Collector, CursorPlan, Plan, creation_day_partitions, wrap_observation
 from ingestion.object_store import LocalObjectStore
 from ingestion.tests.fake_socrata import FakeSocrata
 from warehouse.pipeline import Stages
+from warehouse.sql import read, render
 
 FIXTURE_STAGE = "RAW.FIXTURE_STAGE"
 STAGES = Stages(observations=f"@{FIXTURE_STAGE}/data/", manifests=f"@{FIXTURE_STAGE}/manifests/")
@@ -41,16 +42,31 @@ def stage_collector_run(
 ) -> dict:
     """Collect `rows` with the real collector and PUT its data and manifest files to the fixture stage."""
     root = tmp_path / run_id
-    source = SourceClient(transport=FakeSocrata(rows), sleep=lambda s: None)
-    manifest = Collector(source=source, store=LocalObjectStore(root), clock=lambda: extracted_at).run(
-        Plan(run_id=run_id, partitions=creation_day_partitions(start, days))
-    )
-    cur = conn.cursor()
-    for path in sorted(p for p in root.rglob("*") if p.is_file()):
-        relative = path.relative_to(root).parent.as_posix()
-        if relative.split("/")[0] in ("data", "manifests"):
-            cur.execute(f"PUT 'file://{path}' '@{FIXTURE_STAGE}/{relative}/' AUTO_COMPRESS = FALSE OVERWRITE = FALSE")
+    manifest = collect(root, rows, Plan(run_id=run_id, partitions=creation_day_partitions(start, days)), extracted_at)
+    put_collected(conn, root, "data")
+    put_collected(conn, root, "manifests")
     return manifest
+
+
+def collect(root: Path, rows: list[dict], plan: Plan | CursorPlan, extracted_at: datetime, page_size: int = 1000) -> dict:
+    """Run the real collector against a fake source into a local bucket at `root`."""
+    source = SourceClient(transport=FakeSocrata(rows), sleep=lambda s: None)
+    collector = Collector(source=source, store=LocalObjectStore(root), clock=lambda: extracted_at, page_size=page_size)
+    return collector.run(plan)
+
+
+def put_collected(conn: SnowflakeConnection, root: Path, prefix: str, keys: list[str] | None = None) -> None:
+    """PUT the local bucket's files under `prefix` (data or manifests), or just `keys`, to the fixture stage."""
+    paths = [root / k for k in keys] if keys is not None else sorted((root / prefix).rglob("*"))
+    cur = conn.cursor()
+    for path in (p for p in paths if p.is_file()):
+        relative = path.relative_to(root).parent.as_posix()
+        cur.execute(f"PUT 'file://{path}' '@{FIXTURE_STAGE}/{relative}/' AUTO_COMPRESS = FALSE OVERWRITE = FALSE")
+
+
+def load_observation_files(conn: SnowflakeConnection) -> None:
+    """Bulk-load staged data files into RAW, as Snowpipe would; manifests stay on the stage."""
+    conn.execute_string(render(read("transformations/load_observations.sql"), {"observations_stage": STAGES.observations}))
 
 
 def observation(

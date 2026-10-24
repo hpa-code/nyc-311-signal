@@ -7,3 +7,9 @@ variable "environment" {
     error_message = "environment must be dev or prod."
   }
 }
+
+variable "snowpipe_queue_arn" {
+  description = "notification_channel of the Snowpipe that auto-ingests data/ (SHOW PIPES); null until the pipe exists."
+  type        = string
+  default     = null
+}

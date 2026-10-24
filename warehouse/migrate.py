@@ -3,6 +3,9 @@
 Each migration runs once per database and is recorded in OPS.SCHEMA_MIGRATIONS
 with its checksum. Editing an applied migration is refused: add a new one.
 
+Repeatable migrations (R__name.sql: procedures, tasks) run after them, again
+whenever their rendered text (including any included files) changes.
+
     uv run --env-file .env python -m warehouse.migrate
 """
 
@@ -23,7 +26,7 @@ class MigrationChanged(Exception):
 
 
 def migrate(conn: SnowflakeConnection, env: Environment) -> list[str]:
-    """Apply pending migrations to env.database; returns the versions applied."""
+    """Apply pending migrations to env.database; returns the versions (and R__ names) applied."""
     cur = conn.cursor()
     cur.execute(f"USE DATABASE {env.database}")
     cur.execute("CREATE SCHEMA IF NOT EXISTS OPS")
@@ -54,6 +57,19 @@ def migrate(conn: SnowflakeConnection, env: Environment) -> list[str]:
             (version, name, checksum),
         )
         newly_applied.append(version)
+
+    for path in sorted(MIGRATIONS.glob("R__*.sql")):
+        sql = render(path.read_text(), env.placeholders())
+        checksum = hashlib.sha256(sql.encode()).hexdigest()
+        if applied.get(path.stem) == checksum:
+            continue
+        conn.execute_string(sql)
+        cur.execute("DELETE FROM OPS.SCHEMA_MIGRATIONS WHERE version = %s", (path.stem,))
+        cur.execute(
+            "INSERT INTO OPS.SCHEMA_MIGRATIONS (version, name, checksum) VALUES (%s, %s, %s)",
+            (path.stem, path.stem.removeprefix("R__"), checksum),
+        )
+        newly_applied.append(path.stem)
     return newly_applied
 
 

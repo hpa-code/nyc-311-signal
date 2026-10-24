@@ -96,6 +96,20 @@ resource "aws_s3_bucket_lifecycle_configuration" "observations" {
   }
 }
 
+# New Observation files under data/ (and nothing else) notify Snowpipe's
+# Snowflake-managed SQS queue.
+resource "aws_s3_bucket_notification" "snowpipe" {
+  count  = var.snowpipe_queue_arn == null ? 0 : 1
+  bucket = aws_s3_bucket.observations.id
+
+  queue {
+    id            = "snowpipe-data"
+    queue_arn     = var.snowpipe_queue_arn
+    events        = ["s3:ObjectCreated:*"]
+    filter_prefix = local.prefixes.data
+  }
+}
+
 resource "aws_s3_bucket_policy" "observations" {
   bucket = aws_s3_bucket.observations.id
   policy = data.aws_iam_policy_document.observations_bucket.json

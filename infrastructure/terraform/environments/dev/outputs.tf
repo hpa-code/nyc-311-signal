@@ -21,3 +21,11 @@ output "snowflake_secret_arn" {
 output "snowflake_read_role_arn" {
   value = module.snowflake_storage_access.role_arn
 }
+
+output "collector_function_name" {
+  value = module.daily_collector.function_name
+}
+
+output "alerts_topic_arn" {
+  value = module.daily_collector.alerts_topic_arn
+}

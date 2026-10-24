@@ -11,9 +11,14 @@ class Environment:
     pipeline_role: str
     dashboard_role: str
     warehouse: str = "NYC311_WH"
+    # Live databases auto-ingest from the bucket and run their tasks; test
+    # databases do neither.
+    live: bool = True
+    manifests_stage: str = "@OPS.MANIFESTS_STAGE"
 
-    def with_database(self, database: str) -> "Environment":
-        return replace(self, database=database)
+    def for_tests(self, manifests_stage: str) -> "Environment":
+        """The test database, reading manifests from a fixture stage."""
+        return replace(self, database=self.test_database, live=False, manifests_stage=manifests_stage)
 
     @property
     def test_database(self) -> str:
@@ -27,6 +32,10 @@ class Environment:
             "bucket": self.bucket,
             "storage_integration": self.storage_integration,
             "dashboard_role": self.dashboard_role,
+            "warehouse": self.warehouse,
+            "manifests_stage": self.manifests_stage,
+            "auto_ingest": "TRUE" if self.live else "FALSE",
+            "task_state": "RESUME" if self.live else "SUSPEND",
         }
 
 

@@ -1,9 +1,15 @@
 """Warehouse pipeline: load S3 files into RAW, then (in one transaction) quarantine
 malformed Observations, rebuild affected Request Versions and merge Current Requests.
 
-    uv run --env-file .env python -m warehouse.pipeline
+Daily, Snowpipe loads the files and the readiness task (OPS.READINESS_TASK)
+processes them once their run reconciles. This module is the manual path:
+bulk COPY plus ungated processing (backfill, tests), and the readiness call.
+
+    uv run --env-file .env python -m warehouse.pipeline            # bulk load + process
+    uv run --env-file .env python -m warehouse.pipeline --ready    # what the task does
 """
 
+import json
 import sys
 from dataclasses import dataclass
 
@@ -25,9 +31,16 @@ def run(conn: SnowflakeConnection, stages: Stages = Stages()) -> dict[str, int]:
     values = {"observations_stage": stages.observations, "manifests_stage": stages.manifests}
     counts = {
         "manifests_loaded": _copy(conn, render(read("transformations/load_manifests.sql"), values)),
-        "observations_loaded": _copy(conn, render(read("transformations/load_observations.sql"), values)),
+        "observations_loaded": _bulk_load(conn, render(read("transformations/load_observations.sql"), values)),
     }
     return counts | _process(conn)
+
+
+def process_ready_runs(conn: SnowflakeConnection) -> dict:
+    """One readiness check: process pending Observations if their runs reconcile."""
+    row = conn.cursor().execute("CALL OPS.PROCESS_READY_RUNS()").fetchone()
+    assert isinstance(row, tuple)
+    return json.loads(row[0])
 
 
 PROCESS_STEPS = {
@@ -57,6 +70,12 @@ def _process(conn: SnowflakeConnection) -> dict[str, int]:
     }
 
 
+def _bulk_load(conn: SnowflakeConnection, sql: str) -> int:
+    """Rows that reached RAW (the INSERT out of the landing table)."""
+    _, insert, _ = conn.execute_string(sql)
+    return int(insert.rowcount or 0)
+
+
 def _copy(conn: SnowflakeConnection, sql: str) -> int:
     cur = conn.cursor()
     cur.execute(sql)
@@ -68,12 +87,12 @@ def _copy(conn: SnowflakeConnection, sql: str) -> int:
     return sum(int(row[i]) for row in rows)
 
 
-def main() -> int:
+def main(argv: list[str]) -> int:
     env = DEV
     with connect(env.pipeline_role, env.warehouse, env.database) as conn:
-        print(run(conn))
+        print(process_ready_runs(conn) if "--ready" in argv else run(conn))
     return 0
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(main(sys.argv[1:]))

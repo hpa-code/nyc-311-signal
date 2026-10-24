@@ -1,4 +1,8 @@
-"""Collector: turns a Plan into immutable Observation files and a run manifest.
+"""Collector: turns a plan into immutable Observation files and a run manifest.
+
+A plan is either a set of creation-date partitions (slices, backfill) or a
+cursor pass: every Request whose source `:updated_at` is past the stored
+cursor minus an overlap.
 
 Storage layout (all keys relative to the bucket):
 
@@ -6,6 +10,8 @@ Storage layout (all keys relative to the bucket):
     manifests/extract_date=YYYY-MM-DD/run_id=<run>/manifest.json
     checkpoints/runs/<run>/run.json
     checkpoints/runs/<run>/partitions/<partition>.json
+    checkpoints/cursor/<name>.json
+    checkpoints/leases/<name>.json
 
 A file's key depends only on the run ID, the run's extract date (fixed when
 the run first starts), the partition and the file's position in it, so a
@@ -17,20 +23,55 @@ reaches it, the stored file wins and the page cursor continues from its last row
 import gzip
 import hashlib
 import json
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 
-from ingestion.api_client import DATASET_ID, CreationWindow, PageCursor, SourceClient
+from ingestion.api_client import DATASET_ID, CreationWindow, PageCursor, SourceClient, UpdateWindow, Window
+from ingestion.lease import Lease
 from ingestion.object_store import ObjectStore
 
 SCHEMA_VERSION = 1
+# Project scope: Requests created from this NYC-local moment on.
+SCOPE_START = datetime(2025, 1, 1)
 
 
 @dataclass(frozen=True)
 class Plan:
+    """Collect fixed partitions under one run ID; rerun the same ID to resume."""
+
     run_id: str
-    partitions: list[CreationWindow]
+    partitions: Sequence[Window]
+
+    @property
+    def lease_name(self) -> str:
+        return f"run-{self.run_id}"
+
+
+@dataclass(frozen=True)
+class CursorPlan:
+    """One change-cursor pass. Its run ID is chosen by the collector: a pass
+    that did not finish is resumed (same run, same bounds) before a new one starts.
+
+    `initial_cursor` seeds the cursor only when none is stored yet.
+    """
+
+    name: str = "311"
+    overlap: timedelta = timedelta(hours=6)
+    created_from: datetime = SCOPE_START
+    initial_cursor: str | None = None
+
+    @property
+    def lease_name(self) -> str:
+        return f"cursor-{self.name}"
+
+
+class RunPaused(Exception):
+    """The run stopped at its deadline with work left; rerunning resumes it."""
+
+
+class CursorMissing(Exception):
+    """A cursor pass needs a stored cursor or an initial one."""
 
 
 def creation_day_partitions(start: date, days: int) -> list[CreationWindow]:
@@ -50,18 +91,62 @@ class Collector:
         store: ObjectStore,
         clock: Callable[[], datetime] = utc_now,
         page_size: int = 10_000,
+        lease_ttl: timedelta = timedelta(minutes=16),
     ):
         self._source = source
         self._store = store
         self._clock = clock
         self._page_size = page_size
+        self._lease_ttl = lease_ttl
 
-    def run(self, plan: Plan) -> dict:
+    def run(self, plan: Plan | CursorPlan, stop_at: datetime | None = None) -> dict:
+        """Collect the plan and return its manifest. Raises LeaseHeld if another
+        collector is running the same plan, and RunPaused at `stop_at`."""
+        lease = Lease(self._store, plan.lease_name, self._clock, self._lease_ttl)
+        lease.acquire()
+        try:
+            if isinstance(plan, CursorPlan):
+                return self._run_cursor(plan, lease, stop_at)
+            return self._run_partitions(plan, lease, stop_at)
+        finally:
+            lease.release()
+
+    def _run_cursor(self, plan: CursorPlan, lease: Lease, stop_at: datetime | None) -> dict:
+        key = f"checkpoints/cursor/{plan.name}.json"
+        stored = self._store.get(key)
+        if stored is not None:
+            state = json.loads(stored)
+        elif plan.initial_cursor is not None:
+            state = {"updated_at": _source_timestamp(plan.initial_cursor), "pending": None}
+        else:
+            raise CursorMissing(f"no cursor at {key}; seed one with an initial cursor")
+
+        if state["pending"] is None:
+            since = _source_timestamp(_parse_source_timestamp(state["updated_at"]) - plan.overlap)
+            run_id = f"cursor-{self._clock():%Y%m%dT%H%M%SZ}"
+            if self._store.get(RunLayout(run_id, "").run_key) is not None:
+                raise ValueError(f"run {run_id} already exists; start the next pass later")
+            state["pending"] = {"run_id": run_id, "updated_after": since}
+            self._store.put(key, _json_bytes(state))
+        pending = state["pending"]
+        window = UpdateWindow(updated_after=pending["updated_after"], created_from=plan.created_from)
+
+        manifest = self._run_partitions(Plan(pending["run_id"], [window]), lease, stop_at)
+
+        # Files and manifest are stored: only now may the cursor move.
+        last = manifest["partitions"][0]["last_position"]
+        if last is not None:
+            state["updated_at"] = max(state["updated_at"], last[0], key=_parse_source_timestamp)
+        state.update(pending=None, last_run_id=pending["run_id"], advanced_at=_iso(self._clock()))
+        self._store.put(key, _json_bytes(state))
+        return manifest
+
+    def _run_partitions(self, plan: Plan, lease: Lease, stop_at: datetime | None) -> dict:
         run_state = self._start_or_resume(plan)
         layout = RunLayout(plan.run_id, run_state["extract_date"])
         manifest = self._stored_manifest(layout)
         if manifest is None:
-            partitions = [self._collect_partition(layout, window) for window in plan.partitions]
+            partitions = [self._collect_partition(layout, window, lease, stop_at) for window in plan.partitions]
             manifest = self._write_manifest(layout, partitions)
         if run_state["state"] != "complete":
             run_state["state"] = "complete"
@@ -98,7 +183,8 @@ class Collector:
             "source_dataset": DATASET_ID,
             "schema_version": SCHEMA_VERSION,
             "partitions": [
-                {k: p[k] for k in ("partition", "bounds", "row_count", "checksum")} for p in partitions
+                {k: p[k] for k in ("partition", "bounds", "row_count", "checksum")} | {"last_position": p["after"]}
+                for p in partitions
             ],
             "files": files,
             "file_count": len(files),
@@ -109,7 +195,7 @@ class Collector:
             return self._stored_manifest(layout) or manifest
         return manifest
 
-    def _collect_partition(self, layout: "RunLayout", window: CreationWindow) -> dict:
+    def _collect_partition(self, layout: "RunLayout", window: Window, lease: Lease, stop_at: datetime | None) -> dict:
         key = layout.checkpoint_key(window)
         stored = self._store.get(key)
         checkpoint = json.loads(stored) if stored is not None else _new_checkpoint(window)
@@ -117,8 +203,11 @@ class Collector:
         # Only an empty page ends a partition, so completion never depends on
         # the page size of the run that wrote earlier files.
         while checkpoint["state"] != "complete":
+            if stop_at is not None and self._clock() >= stop_at:
+                raise RunPaused(f"run {layout.run_id} paused in {window.id} after {len(checkpoint['files'])} files")
+            lease.renew()
             after = tuple(checkpoint["after"]) if checkpoint["after"] else None
-            rows = self._source.fetch_created_page(window, after, self._page_size)  # type: ignore[arg-type]
+            rows = self._source.fetch_page(window, after, self._page_size)  # type: ignore[arg-type]
             if not rows:
                 checkpoint["state"] = "complete"
                 self._store.put(key, _json_bytes(checkpoint))
@@ -129,7 +218,7 @@ class Collector:
                 # Stored before a crash: keep it and continue from its last row.
                 data = self._store.get(file_key) or b""
 
-            rows_in_file, last = _file_stats(data)
+            rows_in_file, last = _file_stats(data, window)
             checksum = hashlib.sha256(data).hexdigest()
             checkpoint["files"].append({"key": file_key, "partition": window.id, "rows": rows_in_file, "sha256": checksum})
             checkpoint["after"] = list(last)
@@ -153,10 +242,10 @@ class RunLayout:
     def run_key(self) -> str:
         return f"checkpoints/runs/{self.run_id}/run.json"
 
-    def checkpoint_key(self, window: CreationWindow) -> str:
+    def checkpoint_key(self, window: Window) -> str:
         return f"checkpoints/runs/{self.run_id}/partitions/{window.id}.json"
 
-    def data_key(self, window: CreationWindow, index: int) -> str:
+    def data_key(self, window: Window, index: int) -> str:
         return f"data/extract_date={self.extract_date}/run_id={self.run_id}/{window.id}/part-{index:05d}.ndjson.gz"
 
     @property
@@ -164,11 +253,11 @@ class RunLayout:
         return f"manifests/extract_date={self.extract_date}/run_id={self.run_id}/manifest.json"
 
 
-def _new_checkpoint(window: CreationWindow) -> dict:
+def _new_checkpoint(window: Window) -> dict:
     return {
         "partition": window.id,
-        "bounds": {"created_from": window.start.isoformat(), "created_before": window.end.isoformat()},
-        "order": "created_date, unique_key",
+        "bounds": window.bounds,
+        "order": ", ".join(window.order),
         "after": None,
         "files": [],
         "row_count": 0,
@@ -207,10 +296,23 @@ def _encode_file(rows: list[dict], run_id: str, extracted_at: datetime) -> bytes
     return gzip.compress(lines.encode(), mtime=0)
 
 
-def _file_stats(data: bytes) -> tuple[int, PageCursor]:
+def _file_stats(data: bytes, window: Window) -> tuple[int, PageCursor]:
+    """Row count and keyset position of a file's last row."""
     lines = gzip.decompress(data).decode().splitlines()
-    last = json.loads(lines[-1])["payload"]
-    return len(lines), (last["created_date"], last["unique_key"])
+    last = json.loads(lines[-1])
+    source_fields = {":updated_at": last["source_updated_at"], **last["payload"]}
+    first, key = (source_fields[f] for f in window.order)
+    return len(lines), (first, key)
+
+
+def _parse_source_timestamp(value: str) -> datetime:
+    return datetime.fromisoformat(value)
+
+
+def _source_timestamp(value: str | datetime) -> str:
+    """A `:updated_at` value in the source's own format, 2026-10-23T01:33:15.966Z."""
+    moment = _parse_source_timestamp(value) if isinstance(value, str) else value
+    return moment.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
 
 
 def _iso(moment: datetime) -> str:

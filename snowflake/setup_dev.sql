@@ -32,6 +32,9 @@ REVOKE CREATE DATABASE ON ACCOUNT FROM ROLE NYC311_DEV_PIPELINE;
 GRANT USAGE ON WAREHOUSE NYC311_WH TO ROLE NYC311_DEV_PIPELINE;
 GRANT USAGE ON WAREHOUSE NYC311_WH TO ROLE NYC311_DEV_DASHBOARD;
 
+-- The pipeline role resumes and runs its own tasks (OPS.READINESS_TASK).
+GRANT EXECUTE TASK ON ACCOUNT TO ROLE NYC311_DEV_PIPELINE;
+
 -- Read-only access to the dev bucket's data/ and manifests/ prefixes, through
 -- the AWS role dev-nyc311-snowflake-read (Terraform). The role's trust policy
 -- needs STORAGE_AWS_IAM_USER_ARN and STORAGE_AWS_EXTERNAL_ID from

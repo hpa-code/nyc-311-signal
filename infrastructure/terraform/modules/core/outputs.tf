@@ -14,6 +14,14 @@ output "ingestion_role_arn" {
   value = aws_iam_role.ingestion.arn
 }
 
+output "socrata_secret_name" {
+  value = aws_secretsmanager_secret.socrata_app_token.name
+}
+
+output "ingestion_role_name" {
+  value = aws_iam_role.ingestion.name
+}
+
 output "socrata_secret_arn" {
   value = aws_secretsmanager_secret.socrata_app_token.arn
 }

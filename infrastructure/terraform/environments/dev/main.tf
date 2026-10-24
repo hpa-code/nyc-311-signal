@@ -6,6 +6,10 @@ terraform {
       source  = "hashicorp/aws"
       version = "~> 6.0"
     }
+    archive = {
+      source  = "hashicorp/archive"
+      version = "~> 2.7"
+    }
   }
 
   # Local state, gitignored (*.tfstate). Secret values are never managed by
@@ -25,10 +29,31 @@ provider "aws" {
   }
 }
 
+variable "alert_email" {
+  description = "Receives collector alerts (set in terraform.tfvars, which is gitignored)."
+  type        = string
+  default     = null
+}
+
 module "core" {
   source = "../../modules/core"
 
   environment = "dev"
+  # SHOW PIPES IN DATABASE NYC311_DEV -> notification_channel
+  snowpipe_queue_arn = "arn:aws:sqs:us-east-2:870900716361:sf-snowpipe-AIDA4VRN2KNEZAUINA3LH-9p8s2apCkypqraRs4ZTMRw"
+}
+
+module "daily_collector" {
+  source = "../../modules/daily_collector"
+
+  environment         = "dev"
+  bucket_name         = module.core.bucket_name
+  role_name           = module.core.ingestion_role_name
+  role_arn            = module.core.ingestion_role_arn
+  socrata_secret_name = module.core.socrata_secret_name
+  # Just after the one-week slice was collected (2026-10-23 20:16 UTC).
+  initial_cursor = "2026-10-23T20:16:00.000Z"
+  alert_email    = var.alert_email
 }
 
 # Values from `DESC INTEGRATION NYC311_DEV_S3` (snowflake/setup_dev.sql).

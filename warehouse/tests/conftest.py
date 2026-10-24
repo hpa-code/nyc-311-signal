@@ -26,7 +26,7 @@ def pytest_collection_modifyitems(config, items):
 
 @pytest.fixture(scope="session")
 def test_env():
-    env = DEV.with_database(DEV.test_database)
+    env = DEV.for_tests(manifests_stage=STAGES.manifests)
     conn = connect(env.pipeline_role, env.warehouse, env.database)
     try:
         cur = conn.cursor()
@@ -46,11 +46,16 @@ def test_env():
 def empty_db(test_env):
     """A connection to the test database with RAW, CLEAN, OPS and the fixture stage emptied."""
     # The stream is drained by every pipeline run, so emptying RAW leaves it empty too.
+    # TRUNCATE also clears COPY load history, so fixture files with reused names load again.
     conn, _ = test_env
     cur = conn.cursor()
+    # An append-only stream still returns rows deleted after they were added:
+    # consume whatever an earlier test left unprocessed.
+    cur.execute("INSERT INTO CLEAN.WORK_AFFECTED_REQUESTS SELECT NULL FROM RAW.NEW_OBSERVATIONS WHERE FALSE")
     for table in (
-        "RAW.RAW_311_OBSERVATIONS", "OPS.RUN_MANIFESTS", "CLEAN.SERVICE_REQUESTS",
-        "CLEAN.REQUEST_VERSIONS", "CLEAN.QUARANTINED_RECORDS", "CLEAN.OBSERVATION_POINTS",
+        "RAW.RAW_311_OBSERVATIONS", "RAW.BULK_LANDING", "OPS.RUN_MANIFESTS", "OPS.PIPELINE_RUNS",
+        "CLEAN.SERVICE_REQUESTS", "CLEAN.REQUEST_VERSIONS", "CLEAN.QUARANTINED_RECORDS",
+        "CLEAN.OBSERVATION_POINTS",
     ):
         cur.execute(f"TRUNCATE TABLE {table}")
     cur.execute(f"REMOVE @{FIXTURE_STAGE}")
