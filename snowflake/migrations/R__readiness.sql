@@ -154,8 +154,6 @@ CREATE OR REPLACE TASK OPS.READINESS_TASK
 AS
   CALL OPS.PROCESS_READY_RUNS();
 
-ALTER TASK OPS.READINESS_TASK {{task_state}};
-
 -- Once a day whatever the stream holds: consumes runs that loaded no rows
 -- (an empty pass never wakes READINESS_TASK) and fails if anything is stuck.
 -- 07:45 UTC: after the 06:00 collection, away from READINESS_TASK's :00/:30.
@@ -165,4 +163,23 @@ CREATE OR REPLACE TASK OPS.READINESS_SWEEP_TASK
 AS
   CALL OPS.PROCESS_READY_RUNS();
 
+-- The rest of the task graph: publish (R__publication.sql) after each
+-- successful readiness check. A check that raises (a stuck run) publishes
+-- nothing, so the dashboard keeps its Publication and shows it as stale.
+CREATE OR REPLACE TASK OPS.PUBLISH_TASK
+  WAREHOUSE = {{warehouse}}
+  AFTER OPS.READINESS_TASK
+AS
+  CALL OPS.PUBLISH();
+
+CREATE OR REPLACE TASK OPS.PUBLISH_AFTER_SWEEP_TASK
+  WAREHOUSE = {{warehouse}}
+  AFTER OPS.READINESS_SWEEP_TASK
+AS
+  CALL OPS.PUBLISH();
+
+-- Children before roots: a root must be suspended while its graph changes.
+ALTER TASK OPS.PUBLISH_TASK {{task_state}};
+ALTER TASK OPS.PUBLISH_AFTER_SWEEP_TASK {{task_state}};
+ALTER TASK OPS.READINESS_TASK {{task_state}};
 ALTER TASK OPS.READINESS_SWEEP_TASK {{task_state}};

@@ -1,6 +1,7 @@
 """Dashboard reads: APP views only, through the read-only dashboard role.
 
-Results are cached for an hour; the source publishes once a day. Queries are
+The Publication status is re-read every few minutes; aggregates are cached per
+publication_id, so they stay cached for the life of a Publication. Queries are
 cut off after 60 s so the dashboard cannot hog the shared warehouse.
 """
 
@@ -12,7 +13,7 @@ from warehouse.connection import connect
 from warehouse.environment import DEV
 
 ENV = DEV
-CACHE_SECONDS = 3600
+STATUS_SECONDS = 300
 
 
 @st.cache_resource
@@ -28,14 +29,20 @@ def _frame(sql: str) -> pd.DataFrame:
     return frame
 
 
-@st.cache_data(ttl=CACHE_SECONDS)
-def overview_daily() -> pd.DataFrame:
+@st.cache_data(ttl=STATUS_SECONDS)
+def publication_status() -> pd.Series:
+    return _frame("SELECT * FROM APP.PUBLICATION_STATUS").iloc[0]
+
+
+# publication_id is the cache key: APP views always show the current Publication.
+@st.cache_data(max_entries=2)
+def overview_daily(publication_id: str) -> pd.DataFrame:
     return _frame(
         "SELECT created_date, requests, closed_requests, open_requests"
         " FROM APP.OVERVIEW_DAILY ORDER BY created_date"
     )
 
 
-@st.cache_data(ttl=CACHE_SECONDS)
-def data_coverage() -> pd.Series:
+@st.cache_data(max_entries=2)
+def data_coverage(publication_id: str) -> pd.Series:
     return _frame("SELECT * FROM APP.DATA_COVERAGE").iloc[0]

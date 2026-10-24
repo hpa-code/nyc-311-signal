@@ -63,7 +63,10 @@ def test_newer_observation_wins_and_reloading_changes_nothing(empty_db, tmp_path
         empty_db, "SELECT observations_loaded, manifest_rows, current_requests, latest_extracted_at FROM APP.DATA_COVERAGE"
     )
     assert coverage == {"observations_loaded": 2, "manifest_rows": 2, "current_requests": 1, "latest_extracted_at": later}
-    assert second == {"manifests_loaded": 0, "observations_loaded": 0, "observations_quarantined": 0, "current_requests_merged": 0}
+    assert second == {
+        "manifests_loaded": 0, "observations_loaded": 0, "observations_quarantined": 0, "current_requests_merged": 0,
+        "publication": "unchanged",
+    }
 
 
 def test_dashboard_role_reads_app_views_and_nothing_else(test_env):
@@ -73,10 +76,13 @@ def test_dashboard_role_reads_app_views_and_nothing_else(test_env):
         cur.execute("SELECT COUNT(*) FROM APP.OVERVIEW_DAILY")
         cur.execute("SELECT COUNT(*) FROM APP.DATA_COVERAGE")
         cur.execute("SELECT COUNT(*) FROM APP.TABLEAU_DAILY")
+        cur.execute("SELECT COUNT(*) FROM APP.PUBLICATION_STATUS")
         for forbidden in (
             "SELECT COUNT(*) FROM CLEAN.SERVICE_REQUESTS",
             "SELECT COUNT(*) FROM RAW.RAW_311_OBSERVATIONS",
             "SELECT COUNT(*) FROM OPS.RUN_MANIFESTS",
+            "SELECT COUNT(*) FROM OPS.PUBLICATIONS",
+            "SELECT COUNT(*) FROM ANALYTICS.PUB_OVERVIEW_DAILY",
             "CREATE TABLE APP.SNEAKY (x INT)",
             "CREATE OR REPLACE VIEW APP.OVERVIEW_DAILY AS SELECT 1 AS x",
         ):

@@ -1,12 +1,14 @@
 """Warehouse pipeline: load S3 files into RAW, then (in one transaction) quarantine
-malformed Observations, rebuild affected Request Versions and merge Current Requests.
+malformed Observations, rebuild affected Request Versions and merge Current Requests,
+then publish.
 
-Daily, Snowpipe loads the files and the readiness task (OPS.READINESS_TASK)
-processes them once their run reconciles. This module is the manual path:
-bulk COPY plus ungated processing (backfill, tests), and the readiness call.
+Daily, Snowpipe loads the files, the readiness task (OPS.READINESS_TASK)
+processes them once their run reconciles, and its child OPS.PUBLISH_TASK
+publishes. This module is the manual path: bulk COPY plus ungated processing
+(backfill, tests), the readiness call, and publishing.
 
-    uv run --env-file .env python -m warehouse.pipeline            # bulk load + process
-    uv run --env-file .env python -m warehouse.pipeline --ready    # what the task does
+    uv run --env-file .env python -m warehouse.pipeline            # bulk load + process + publish
+    uv run --env-file .env python -m warehouse.pipeline --ready    # what the task graph does
 """
 
 import json
@@ -26,19 +28,30 @@ class Stages:
     manifests: str = "@OPS.MANIFESTS_STAGE"
 
 
-def run(conn: SnowflakeConnection, stages: Stages = Stages()) -> dict[str, int]:
-    """Run every step; returns rows loaded or merged per step."""
+def run(conn: SnowflakeConnection, stages: Stages = Stages()) -> dict[str, int | str]:
+    """Run every step; returns rows loaded or merged per step, and the publish outcome."""
     values = {"observations_stage": stages.observations, "manifests_stage": stages.manifests}
-    counts = {
+    counts: dict[str, int | str] = {
         "manifests_loaded": _copy(conn, render(read("transformations/load_manifests.sql"), values)),
         "observations_loaded": _bulk_load(conn, render(read("transformations/load_observations.sql"), values)),
     }
-    return counts | _process(conn)
+    return counts | _process(conn) | {"publication": publish(conn)["outcome"]}
 
 
 def process_ready_runs(conn: SnowflakeConnection) -> dict:
     """One readiness check: process pending Observations if their runs reconcile."""
     row = conn.cursor().execute("CALL OPS.PROCESS_READY_RUNS()").fetchone()
+    assert isinstance(row, tuple)
+    return json.loads(row[0])
+
+
+def publish(conn: SnowflakeConnection) -> dict:
+    """Build, check and (if every check passes) publish a new Publication.
+
+    Returns its outcome: published, unchanged, or waiting (a run is in flight).
+    Raises if the checks fail; the current Publication then stays.
+    """
+    row = conn.cursor().execute("CALL OPS.PUBLISH()").fetchone()
     assert isinstance(row, tuple)
     return json.loads(row[0])
 
@@ -90,7 +103,11 @@ def _copy(conn: SnowflakeConnection, sql: str) -> int:
 def main(argv: list[str]) -> int:
     env = DEV
     with connect(env.pipeline_role, env.warehouse, env.database) as conn:
-        print(process_ready_runs(conn) if "--ready" in argv else run(conn))
+        if "--ready" in argv:
+            print(process_ready_runs(conn))
+            print(publish(conn))
+        else:
+            print(run(conn))
     return 0
 
 

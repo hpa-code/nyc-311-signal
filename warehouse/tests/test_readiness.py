@@ -8,7 +8,7 @@ import pytest
 from snowflake.connector.errors import ProgrammingError
 
 from ingestion.collector import CursorPlan, RunLayout
-from warehouse.pipeline import process_ready_runs, run
+from warehouse.pipeline import process_ready_runs, publish, run
 from warehouse.tests.fixtures import STAGES, collect, load_observation_files, put_collected, source_row
 from warehouse.tests.test_warehouse import rows_of
 
@@ -16,6 +16,13 @@ DAY_1 = datetime(2026, 10, 24, 6, 0, tzinfo=timezone.utc)
 DAY_2 = datetime(2026, 10, 25, 6, 0, tzinfo=timezone.utc)
 PLAN = CursorPlan(initial_cursor="2026-10-23T20:00:00.000Z")
 CREATED = "2026-10-20T08:00:00.000"
+
+
+def readiness(conn) -> dict:
+    """What the task graph does: the readiness check, then (if it succeeds) publish."""
+    result = process_ready_runs(conn)
+    publish(conn)
+    return result
 
 
 def manifest_key(manifest: dict) -> str:
@@ -58,14 +65,14 @@ def test_a_request_closed_at_the_source_is_closed_after_the_next_run(empty_db, t
     day_1 = collect(bucket, [source_row("700", CREATED, updated_at="2026-10-24T01:33:15.966Z")], PLAN, DAY_1)
     deliver(empty_db, bucket, day_1)
 
-    assert process_ready_runs(empty_db)["outcome"] == "processed"
+    assert readiness(empty_db)["outcome"] == "processed"
     assert overview(empty_db) == [(date(2026, 10, 20), 1, 0)]
 
     closed = source_row("700", CREATED, updated_at="2026-10-25T01:33:10.000Z", status="Closed", closed_date="2026-10-24T16:00:00.000")
     day_2 = collect(bucket, [closed, source_row("701", "2026-10-24T09:00:00.000", updated_at="2026-10-25T01:33:10.000Z")], PLAN, DAY_2)
     deliver(empty_db, bucket, day_2)
 
-    result = process_ready_runs(empty_db)
+    result = readiness(empty_db)
 
     assert result == {"outcome": "processed", "runs": [day_2["run_id"]], "observations": 2, "quarantined": 0}
     assert overview(empty_db) == [(date(2026, 10, 20), 1, 1), (date(2026, 10, 24), 1, 0)]
@@ -85,12 +92,12 @@ def test_files_without_their_manifest_wait_and_nothing_flows_downstream(empty_db
     put_collected(empty_db, bucket, "data", data_keys(manifest))
     load_observation_files(empty_db)
 
-    assert process_ready_runs(empty_db) == {"outcome": "waiting", "blocked_files": 2, "pending_rows": 3, "ready_runs": []}
+    assert readiness(empty_db) == {"outcome": "waiting", "blocked_files": 2, "pending_rows": 3, "ready_runs": []}
     assert overview(empty_db) == []
 
     # The manifest arrives; the same Observations (still pending) now flow.
     put_collected(empty_db, bucket, "manifests", [manifest_key(manifest)])
-    assert process_ready_runs(empty_db)["observations"] == 3
+    assert readiness(empty_db)["observations"] == 3
     assert overview(empty_db) == [(date(2026, 10, 20), 3, 0)]
 
 
@@ -101,25 +108,25 @@ def test_a_partly_loaded_run_waits_until_every_file_and_row_is_in(empty_db, tmp_
     load_observation_files(empty_db)
     put_collected(empty_db, bucket, "manifests", [manifest_key(manifest)])
 
-    assert process_ready_runs(empty_db)["outcome"] == "waiting"
+    assert readiness(empty_db)["outcome"] == "waiting"
     assert overview(empty_db) == []
     assert pipeline_runs(empty_db) == [(manifest["run_id"], "waiting", 3, 2, None)]
 
     put_collected(empty_db, bucket, "data", [second])
     load_observation_files(empty_db)
 
-    assert process_ready_runs(empty_db)["outcome"] == "processed"
+    assert readiness(empty_db)["outcome"] == "processed"
     assert pipeline_runs(empty_db) == [(manifest["run_id"], "consumed", 3, 3, 3)]
 
 
 def test_a_consumed_run_is_never_processed_again(empty_db, tmp_path):
     bucket, manifest = two_file_run(tmp_path)
     deliver(empty_db, bucket, manifest)
-    process_ready_runs(empty_db)
+    readiness(empty_db)
 
     # Bulk-loading the same files again adds nothing to RAW; the check is idle.
     load_observation_files(empty_db)
-    assert process_ready_runs(empty_db) == {"outcome": "idle"}
+    assert readiness(empty_db) == {"outcome": "idle"}
     assert observations_loaded(empty_db) == 3
     assert pipeline_runs(empty_db) == [(manifest["run_id"], "consumed", 3, 3, 3)]
 
@@ -140,7 +147,7 @@ def test_bulk_load_skips_files_snowpipe_already_loaded(empty_db, tmp_path):
     assert observations_loaded(empty_db) == 3
     assert overview(empty_db) == [(date(2026, 10, 20), 3, 0)]
     # Its run reconciles once: each row was loaded exactly once.
-    process_ready_runs(empty_db)
+    readiness(empty_db)
     [run_row] = rows_of(empty_db, "SELECT state, loaded_rows, duplicate_rows FROM OPS.PIPELINE_RUNS")
     assert run_row == {"state": "consumed", "loaded_rows": 3, "duplicate_rows": 0}
 
@@ -150,7 +157,7 @@ def test_an_empty_pass_is_consumed_by_the_daily_sweep(empty_db, tmp_path):
     empty = collect(bucket, [], PLAN, DAY_1)
     put_collected(empty_db, bucket, "manifests", [manifest_key(empty)])
 
-    result = process_ready_runs(empty_db)
+    result = readiness(empty_db)
 
     assert result == {"outcome": "processed", "runs": [empty["run_id"]], "observations": 0, "quarantined": 0}
     assert pipeline_runs(empty_db) == [(empty["run_id"], "consumed", 0, 0, 0)]
@@ -162,13 +169,13 @@ def test_a_run_waiting_more_than_six_hours_fails_the_check(empty_db, tmp_path):
     put_collected(empty_db, bucket, "data", [first])
     load_observation_files(empty_db)
     put_collected(empty_db, bucket, "manifests", [manifest_key(manifest)])
-    assert process_ready_runs(empty_db)["outcome"] == "waiting"
+    assert readiness(empty_db)["outcome"] == "waiting"
 
     # Seven hours later the second file has still not loaded.
     empty_db.cursor().execute("UPDATE OPS.PIPELINE_RUNS SET first_seen_at = DATEADD(hour, -7, first_seen_at)")
 
     with pytest.raises(ProgrammingError, match="waited more than 6 hours"):
-        process_ready_runs(empty_db)
+        readiness(empty_db)
     # The check's own bookkeeping still committed; nothing flowed downstream.
     assert pipeline_runs(empty_db) == [(manifest["run_id"], "waiting", 3, 2, None)]
     assert overview(empty_db) == []

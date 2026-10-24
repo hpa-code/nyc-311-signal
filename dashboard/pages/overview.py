@@ -2,7 +2,7 @@ import altair as alt
 import pandas as pd
 import streamlit as st
 
-from dashboard.queries import data_coverage, overview_daily
+from dashboard.queries import data_coverage, overview_daily, publication_status
 
 NEW_YORK = "America/New_York"
 # Categorical slots 1-2 of the validated default palette, per theme; the bar
@@ -16,8 +16,15 @@ SERIES, SURFACE = PALETTES["dark" if st.context.theme.type == "dark" else "light
 st.title("Overview")
 st.caption("NYC 311 Service Requests by creation date (New York time). Open means not yet Closed as of the latest Observation.")
 
-daily = overview_daily()
-coverage = data_coverage()
+status = publication_status()
+if pd.isna(status["publication_id"]):
+    st.info("No Publication yet.")
+    st.stop()
+if status["stale"]:
+    st.warning(f"Stale data: {status['stale_reason']}. Showing the last valid Publication.", icon=":material/warning:")
+
+daily = overview_daily(status["publication_id"])
+coverage = data_coverage(status["publication_id"])
 
 if daily.empty:
     st.info("No Requests loaded yet.")
@@ -32,7 +39,9 @@ c4.metric("Latest extraction", latest.strftime("%b %d, %H:%M"), help="New York t
 st.caption(
     f"Coverage: created {coverage['first_created_date']:%b %d, %Y} to {coverage['last_created_date']:%b %d, %Y} · "
     f"{int(coverage['files_loaded'])} files from {int(coverage['runs'])} run(s) · "
-    f"{int(coverage['observations_loaded']):,} Observations loaded"
+    f"{int(coverage['observations_loaded']):,} Observations loaded · "
+    f"Publication {status['publication_id']}, published "
+    f"{pd.Timestamp(status['published_at']).tz_convert(NEW_YORK):%b %d, %H:%M} New York time"
 )
 
 long = daily.melt(

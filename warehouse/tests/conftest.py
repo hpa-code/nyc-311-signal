@@ -44,7 +44,7 @@ def test_env():
 
 @pytest.fixture
 def empty_db(test_env):
-    """A connection to the test database with RAW, CLEAN, OPS and the fixture stage emptied."""
+    """A connection to the test database with RAW, CLEAN, OPS, Publications and the fixture stage emptied."""
     # The stream is drained by every pipeline run, so emptying RAW leaves it empty too.
     # TRUNCATE also clears COPY load history, so fixture files with reused names load again.
     conn, _ = test_env
@@ -55,7 +55,9 @@ def empty_db(test_env):
     for table in (
         "RAW.RAW_311_OBSERVATIONS", "RAW.BULK_LANDING", "OPS.RUN_MANIFESTS", "OPS.PIPELINE_RUNS",
         "CLEAN.SERVICE_REQUESTS", "CLEAN.REQUEST_VERSIONS", "CLEAN.QUARANTINED_RECORDS",
-        "CLEAN.OBSERVATION_POINTS",
+        "CLEAN.OBSERVATION_POINTS", "OPS.PUBLICATIONS", "OPS.CURRENT_PUBLICATION",
+        "ANALYTICS.PUB_OVERVIEW_DAILY", "ANALYTICS.PUB_DATA_COVERAGE", "ANALYTICS.PUB_QUARANTINE_SUMMARY",
+        "ANALYTICS.PUB_TABLEAU_DAILY",
     ):
         cur.execute(f"TRUNCATE TABLE {table}")
     cur.execute(f"REMOVE @{FIXTURE_STAGE}")
