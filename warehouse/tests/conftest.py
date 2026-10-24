@@ -9,7 +9,8 @@ import pytest
 from warehouse.connection import connect, credentials_available
 from warehouse.environment import DEV
 from warehouse.migrate import migrate
-from warehouse.tests.fixtures import FIXTURE_STAGE
+from warehouse.pipeline import run
+from warehouse.tests.fixtures import FIXTURE_STAGE, STAGES
 
 SCHEMAS = ("RAW", "CLEAN", "ANALYTICS", "ML", "OPS", "APP")
 
@@ -33,6 +34,9 @@ def test_env():
             cur.execute(f"DROP SCHEMA IF EXISTS {schema} CASCADE")
         migrate(conn, env)
         cur.execute(f"CREATE STAGE {FIXTURE_STAGE}")
+        # A stream's first read returns only the rows present when it was created
+        # (none here); later rows wait for the next read. Take that first read now.
+        run(conn, STAGES)
         yield conn, env
     finally:
         conn.close()
@@ -41,9 +45,13 @@ def test_env():
 @pytest.fixture
 def empty_db(test_env):
     """A connection to the test database with RAW, CLEAN, OPS and the fixture stage emptied."""
+    # The stream is drained by every pipeline run, so emptying RAW leaves it empty too.
     conn, _ = test_env
     cur = conn.cursor()
-    for table in ("RAW.RAW_311_OBSERVATIONS", "OPS.RUN_MANIFESTS", "CLEAN.SERVICE_REQUESTS"):
+    for table in (
+        "RAW.RAW_311_OBSERVATIONS", "OPS.RUN_MANIFESTS", "CLEAN.SERVICE_REQUESTS",
+        "CLEAN.REQUEST_VERSIONS", "CLEAN.QUARANTINED_RECORDS",
+    ):
         cur.execute(f"TRUNCATE TABLE {table}")
     cur.execute(f"REMOVE @{FIXTURE_STAGE}")
     return conn

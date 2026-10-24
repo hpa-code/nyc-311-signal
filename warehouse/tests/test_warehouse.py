@@ -61,7 +61,7 @@ def test_newer_observation_wins_and_reloading_changes_nothing(empty_db, tmp_path
         empty_db, "SELECT observations_loaded, manifest_rows, current_requests, latest_extracted_at FROM APP.DATA_COVERAGE"
     )
     assert coverage == {"observations_loaded": 2, "manifest_rows": 2, "current_requests": 1, "latest_extracted_at": later}
-    assert second == {"manifests_loaded": 0, "observations_loaded": 0, "current_requests_merged": 0}
+    assert second == {"manifests_loaded": 0, "observations_loaded": 0, "observations_quarantined": 0, "current_requests_merged": 0}
 
 
 def test_dashboard_role_reads_app_views_and_nothing_else(test_env):

@@ -1,35 +1,31 @@
--- Latest observed state wins: ordered by source :updated_at, then extraction
--- time, then payload hash as a deterministic tie-breaker. Never by load time.
--- Observations without :updated_at cannot be ordered and are skipped (the
--- collector refuses them; ticket 05 quarantines them).
+-- Current Request = the latest Request Version. The guard means an older
+-- version can never replace a newer Current Request, whatever arrives when.
 MERGE INTO CLEAN.SERVICE_REQUESTS AS t
 USING (
   SELECT
-    o.observation:payload:unique_key::STRING                                AS unique_key,
-    TRY_TO_TIMESTAMP_NTZ(o.observation:payload:created_date::STRING)        AS created_at_local,
+    v.unique_key,
+    TRY_TO_TIMESTAMP_NTZ(v.payload:created_date::STRING)                    AS created_at_local,
     CONVERT_TIMEZONE('America/New_York', 'UTC', created_at_local)           AS created_at_utc,
     created_at_local::DATE                                                  AS created_date_local,
-    TRY_TO_TIMESTAMP_NTZ(o.observation:payload:closed_date::STRING)         AS closed_at_local,
-    o.observation:payload:status::STRING                                    AS status,
-    o.observation:payload:agency::STRING                                    AS agency,
-    o.observation:payload:complaint_type::STRING                            AS problem,
-    o.observation:payload:descriptor::STRING                                AS problem_detail,
-    o.observation:payload:borough::STRING                                   AS borough,
-    o.observation:payload:open_data_channel_type::STRING                    AS open_data_channel_type,
-    o.observation:payload:location_type::STRING                             AS location_type,
-    o.source_updated_at,
-    o.extracted_at,
-    o.payload_hash,
-    o.run_id,
-    o.source_file,
-    MIN(o.extracted_at) OVER (PARTITION BY unique_key)                      AS first_observed_at
-  FROM RAW.RAW_311_OBSERVATIONS AS o
-  WHERE o.observation:payload:unique_key IS NOT NULL
-    AND o.source_updated_at IS NOT NULL
-    AND o.extracted_at IS NOT NULL
+    TRY_TO_TIMESTAMP_NTZ(v.payload:closed_date::STRING)                     AS closed_at_local,
+    v.payload:status::STRING                                                AS status,
+    v.payload:agency::STRING                                                AS agency,
+    v.payload:complaint_type::STRING                                        AS problem,
+    v.payload:descriptor::STRING                                            AS problem_detail,
+    v.payload:borough::STRING                                               AS borough,
+    v.payload:open_data_channel_type::STRING                                AS open_data_channel_type,
+    v.payload:location_type::STRING                                         AS location_type,
+    v.last_seen_updated_at                                                  AS source_updated_at,
+    v.last_seen_extracted_at                                                AS extracted_at,
+    v.payload_hash,
+    v.run_id,
+    v.source_file,
+    MIN(v.first_extracted_at) OVER (PARTITION BY v.unique_key)              AS first_observed_at
+  FROM CLEAN.REQUEST_VERSIONS AS v
+  WHERE v.unique_key IN (SELECT unique_key FROM CLEAN.WORK_VERSION_CANDIDATES)
   QUALIFY ROW_NUMBER() OVER (
-    PARTITION BY unique_key
-    ORDER BY o.source_updated_at DESC, o.extracted_at DESC, o.payload_hash DESC
+    PARTITION BY v.unique_key
+    ORDER BY v.last_seen_updated_at DESC, v.last_seen_extracted_at DESC, v.payload_hash DESC
   ) = 1
 ) AS s
 ON t.unique_key = s.unique_key
