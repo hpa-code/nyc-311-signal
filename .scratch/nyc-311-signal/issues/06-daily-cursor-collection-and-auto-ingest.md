@@ -4,7 +4,7 @@
 
 **Blocked by:** 05 (Request Versions, stale-overwrite guard and quarantine)
 
-**Status:** ready-for-agent
+**Status:** done
 
 **Mirror:** GitHub #7
 
@@ -14,7 +14,7 @@
 - [x] Snowpipe auto-ingests only the data prefix; manifests load through a separate control path
 - [x] A readiness task starts downstream work only when the manifest reconciles with loaded files and counts, and tracks consumed runs
 - [x] Seam 1 tests for the cursor, the overlap and the lease
-- [ ] Demo: a Request closed at the source appears closed in the Current Request after the next run
+- [x] Demo: a Request closed at the source appears closed in the Current Request after the next run
 
 ## Comments
 
@@ -42,3 +42,9 @@ Two-axis review of 94ca3db; these are the fixes:
 - **Dev runs daily: recorded exception** (owner chose this, 2026-10-24) in instruction.md §13. Disable the dev schedule when prod's starts.
 - **Seam 2 readiness tests** now assert on `APP.OVERVIEW_DAILY`, `APP.DATA_COVERAGE` and `OPS.PIPELINE_RUNS`, not CLEAN or RAW. The pipe-definition text test is dropped; the channel split is a Seam 1 test. There are new tests for an empty pass and a stale run.
 - **Left as judgement calls:** the dict cursor state and the string run state.
+
+**2026-10-24 (agent): demo done; the first fully scheduled day.**
+- EventBridge started the collector at 06:00:15 UTC. Run `cursor-20261024T060016Z` wrote 549,276 Observations (latest extraction 06:13:44 UTC), and Snowpipe loaded them.
+- `OPS.READINESS_TASK` reconciled the run at 06:30 UTC (549,276 of 549,276 rows) and processed it. `OPS.PUBLISH_TASK` (ticket 07) then published `20261024T063039-b5cf0e6e`, which is not stale. Nobody touched it.
+- Of the 4,706 Requests in `OPS.DEMO_06_OPEN_BEFORE`, 42 are now Closed in `CLEAN.SERVICE_REQUESTS`, each with a new Request Version from this run. One example is `70330585` (DPR, Overgrown Tree/Branches), source `:updated_at` 2026-10-24T01:32:46Z.
+- Current Requests: 619,529; Observations loaded: 621,106. `OPS.DEMO_06_OPEN_BEFORE` can be dropped.
