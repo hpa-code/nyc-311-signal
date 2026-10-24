@@ -27,3 +27,30 @@
 - **Rebuild on change.** The publish input hash now includes `R__publication`'s migration checksum. Before this, a changed procedure returned `unchanged` until new data arrived.
 - **Dev:** V013 applied to `NYC311_DEV`. Publication `20261024T205612-232ba421` built from 6.9M Requests in about 60 s, and every check passed. On Oct 23, 248,693 Requests were observed open against 248,694 retrospective. The Overdue Queue holds 224,026 Requests. 6,763,587 Requests have a cell.
 - **Tests:** 4 new Seam 2 tests in `warehouse/tests/test_analytics.py` (Overdue boundary at exactly 168 h with NYPD, durations and denominators, one observed snapshot per day surviving a held attempt, small-cell hiding and no coordinates). The dashboard-role test covers the new views.
+
+**2026-10-24 (agent): review fixes.**
+Two-axis review of e2ea447. Fixes:
+- **Small cells could leak.** `PUB_GEO_CELLS` published each cell's all-Problems count next to its per-Problem counts, so subtracting one from the other gave a count under 20. Cells are now published per Problem only. The map needs one Problem chosen; the borough table still offers All Problems.
+- **Date-Only Closures** are now judged by New York calendar day (V014 `REQUEST_FACTS`):
+  - On the creation day: counts as 0 hours, no longer as a Closure before creation.
+  - On the horizon day: no known outcome, so left out of the 7-day rate.
+  - Otherwise: within the horizon if before the horizon day.
+- **Horizon boundary.** Overdue and "past the horizon" now mean strictly more than 168 hours. `hours_open` counts whole elapsed hours, not hour boundaries crossed.
+- **Missing categories.** The pages now say that missing Problem, agency or borough show as "Unspecified".
+- **Tests.**
+  - The backlog test asserts only through `APP.PUBLISHED_BACKLOG_DAILY`: a held attempt, then a fixed next-day Publication still shows the earlier day's snapshot unchanged.
+  - New cases: the Overdue boundary at 168 h + 1 s, and both Date-Only Closure cases.
+- **Smells.**
+  - The H3 expression became one function, `CLEAN.NYC_H3_CELL`.
+  - `REQUEST_FACTS` computes the 168 h check once (`past_horizon`).
+  - `GroupFilter` replaces the problem/agency/borough triple.
+  - `dashboard/common.py` → `dashboard/ui.py`, with shared `durations_table`, `horizontal_bars`, `MIN_REQUESTS` and a theme-aware map ramp.
+  - The Overdue count comes from SQL (`overdue_count`), not a filter in Python.
+  - "Unresolved" → "Still open" (GLOSSARY avoids "resolution").
+- **Dev:** V014 applied and published as `20261024T212958-4d2c44f8`. It has no all-Problems cells, 6 same-day Date-Only Closures are now timed, and about 5k horizon-day ones are out of the 7-day rate.
+- **Left as is:**
+  - Borough groups are not held to the 20 minimum in `PUB_DURATION_STATS` or the daily stats. instruction.md §12 allows "boroughs or aggregated geographic cells with at least 20 requests each", so the minimum binds cells. The page still hides boroughs under 20 as too small to compare.
+  - Table names keep the `PUB_` prefix that every per-Publication output uses (`PUB_DAILY_REQUEST_STATS`, not the planning table's `DAILY_REQUEST_STATS`). `DAILY_BACKLOG` matches the plan.
+  - The comment `-- unresolved` stays in V013: applied migrations are never edited.
+  - Kept, though the ticket did not ask for them: weekly trend lines, the duration breakdown by month and agency, the top-10 agency chart, and Status and Days open on the Overdue Queue. The publish rebuild-on-procedure-change also stays, since deploys need it.
+  - `OPS.PUBLISH()` keeps growing by one INSERT, check and prune per output. That is the existing pattern; splitting it would be its own change.

@@ -16,14 +16,7 @@ USING (
     v.payload:borough::STRING                                               AS borough,
     v.payload:open_data_channel_type::STRING                                AS open_data_channel_type,
     v.payload:location_type::STRING                                         AS location_type,
-    -- H3 cell of the location (V013__analytics_pages.sql); no cell outside NYC.
-    H3_LATLNG_TO_CELL_STRING(
-      IFF(TRY_TO_DOUBLE(v.payload:latitude::STRING) BETWEEN 40.4 AND 41.0
-          AND TRY_TO_DOUBLE(v.payload:longitude::STRING) BETWEEN -74.3 AND -73.6,
-          TRY_TO_DOUBLE(v.payload:latitude::STRING), NULL),
-      TRY_TO_DOUBLE(v.payload:longitude::STRING),
-      8
-    )                                                                       AS h3_cell,
+    CLEAN.NYC_H3_CELL(v.payload)                                            AS h3_cell,
     v.last_seen_updated_at                                                  AS source_updated_at,
     v.last_seen_extracted_at                                                AS extracted_at,
     v.payload_hash,

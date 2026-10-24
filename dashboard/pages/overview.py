@@ -2,14 +2,14 @@ import altair as alt
 import pandas as pd
 import streamlit as st
 
-from dashboard.common import current_publication, group_filters, new_york, palette, share
+from dashboard.ui import UNSPECIFIED_NOTE, current_publication, durations_table, group_filter, palette, percent, to_new_york
 from dashboard.queries import backlog, daily_stats, data_coverage, durations, groups, overview_daily
 
 colors = palette()
-FIRST, SECOND = colors["series"]
+BLUE, ORANGE = colors["blue"], colors["orange"]
 
 st.title("Overview")
-st.caption("NYC 311 Service Requests, all agencies including NYPD. Dates are New York time.")
+st.caption(f"NYC 311 Service Requests, all agencies including NYPD. Dates are New York time. {UNSPECIFIED_NOTE}")
 
 status = current_publication()
 pid = status["publication_id"]
@@ -23,19 +23,19 @@ c1, c2, c3, c4 = st.columns(4)
 c1.metric("Requests", f"{int(daily['requests'].sum()):,}")
 c2.metric("Open now", f"{int(daily['open_requests'].sum()):,}", help="Not Closed as of the latest Observation.")
 c3.metric("Distinct Requests observed", f"{int(coverage['distinct_requests_observed']):,}")
-c4.metric("Latest extraction", new_york(coverage["latest_extracted_at"]).strftime("%b %d, %H:%M"), help="New York time")
+c4.metric("Latest extraction", to_new_york(coverage["latest_extracted_at"]).strftime("%b %d, %H:%M"), help="New York time")
 st.caption(
     f"Coverage: created {coverage['first_created_date']:%b %d, %Y} to {coverage['last_created_date']:%b %d, %Y} · "
     f"{int(coverage['files_loaded'])} files from {int(coverage['runs'])} run(s) · "
     f"{int(coverage['observations_loaded']):,} Observations loaded · "
     f"{int(coverage['manifest_rows']):,} rows in run manifests · "
-    f"Publication {pid}, published {new_york(status['published_at']):%b %d, %H:%M} New York time"
+    f"Publication {pid}, published {to_new_york(status['published_at']):%b %d, %H:%M} New York time"
 )
 
-problem, agency, borough = group_filters(groups(pid), "overview")
+selected = group_filter(groups(pid), "overview")
 
 # Submission and Closure trends, by week (Monday start).
-stats = daily_stats(pid, problem, agency, borough)
+stats = daily_stats(pid, selected)
 if stats.empty:
     st.info("No Requests match these filters.")
     st.stop()
@@ -56,7 +56,7 @@ st.altair_chart(
         x=alt.X("week:T", title=None, axis=alt.Axis(format="%b %Y")),
         y=alt.Y("requests:Q", title="Requests", axis=alt.Axis(grid=True, gridOpacity=0.3)),
         color=alt.Color(
-            "series:N", title=None, scale=alt.Scale(domain=["Submitted", "Closed"], range=[FIRST, SECOND]),
+            "series:N", title=None, scale=alt.Scale(domain=["Submitted", "Closed"], range=[BLUE, ORANGE]),
             legend=alt.Legend(orient="top"),
         ),
         tooltip=[
@@ -75,7 +75,7 @@ st.caption(
 
 # Backlog: observed snapshots beside the reconstruction.
 KINDS = {"observed": "Observed", "retrospective": "Retrospective"}
-open_backlog = backlog(pid, problem, agency, borough)
+open_backlog = backlog(pid, selected)
 open_backlog["kind"] = open_backlog["kind"].map(KINDS)
 open_backlog["backlog_date"] = pd.to_datetime(open_backlog["backlog_date"])
 backlog_chart = (
@@ -84,7 +84,7 @@ backlog_chart = (
         x=alt.X("backlog_date:T", title=None, axis=alt.Axis(format="%b %Y")),
         y=alt.Y("open_requests:Q", title="Open Requests", axis=alt.Axis(grid=True, gridOpacity=0.3)),
         color=alt.Color(
-            "kind:N", title=None, scale=alt.Scale(domain=list(KINDS.values()), range=[SECOND, FIRST]),
+            "kind:N", title=None, scale=alt.Scale(domain=list(KINDS.values()), range=[ORANGE, BLUE]),
             legend=alt.Legend(orient="top"),
         ),
         strokeDash=alt.StrokeDash(
@@ -111,18 +111,18 @@ st.caption(
 
 # Durations with their denominators, closure rates and unresolved counts.
 st.subheader("Time to Closure")
-months = durations(pid, problem, agency, borough)
+months = durations(pid, selected)
 overall = months[months["created_month"].isna()].iloc[0]
 c1, c2, c3, c4 = st.columns(4)
 c1.metric(
-    "Closed within 7 days", share(overall["closed_within_horizon"], overall["horizon_passed"]),
+    "Closed within 7 days", percent(overall["closed_within_horizon"], overall["horizon_passed"]),
     help=f"Of {int(overall['horizon_passed']):,} Requests past their Seven-Day Horizon with a known outcome.",
 )
 c2.metric("Median to Closure", f"{overall['median_hours'] / 24:.1f} days" if pd.notna(overall["median_hours"]) else "–",
           help=f"Of {int(overall['timed_closures']):,} Closures with a usable Closure time.")
 c3.metric("p90 to Closure", f"{overall['p90_hours'] / 24:.1f} days" if pd.notna(overall["p90_hours"]) else "–",
           help=f"Of {int(overall['timed_closures']):,} Closures with a usable Closure time.")
-c4.metric("Unresolved", f"{int(overall['open_requests']):,}", help=f"Of {int(overall['requests']):,} Requests, still open.")
+c4.metric("Still open", f"{int(overall['open_requests']):,}", help=f"Of {int(overall['requests']):,} Requests.")
 
 by_month = months[months["created_month"].notna()].copy()
 by_month["created_month"] = pd.to_datetime(by_month["created_month"])
@@ -136,7 +136,7 @@ st.altair_chart(
     .encode(
         x=alt.X("yearmonth(created_month):T", title=None, axis=alt.Axis(format="%b %Y")),
         y=alt.Y("days:Q", title="Days", axis=alt.Axis(grid=True, gridOpacity=0.3)),
-        color=alt.Color("statistic:N", title=None, scale=alt.Scale(domain=["Median", "p90"], range=[FIRST, SECOND]),
+        color=alt.Color("statistic:N", title=None, scale=alt.Scale(domain=["Median", "p90"], range=[BLUE, ORANGE]),
                         legend=alt.Legend(orient="top")),
         tooltip=[
             alt.Tooltip("yearmonth(created_month):T", title="Created", format="%B %Y"),
@@ -152,18 +152,9 @@ st.altair_chart(
 )
 st.caption(
     "Durations count only Requests already Closed, so recent months look faster than they will: read them with "
-    "the unresolved count and the 7-day closure rate below. Some agencies record Closure dates without a time "
+    "the still-open count and the 7-day closure rate below. Some agencies record Closure dates without a time "
     "(Date-Only Closures), which can shift a duration by up to a day."
 )
 
-table = pd.DataFrame({
-    "Created": by_month["created_month"].dt.strftime("%b %Y"),
-    "Requests": by_month["requests"],
-    "Unresolved": by_month["open_requests"],
-    "Closed within 7 days": [share(a, b) for a, b in zip(by_month["closed_within_horizon"], by_month["horizon_passed"])],
-    "Past 7 days (n)": by_month["horizon_passed"],
-    "Median days": (by_month["median_hours"] / 24).round(1),
-    "p90 days": (by_month["p90_hours"] / 24).round(1),
-    "Closures measured (n)": by_month["timed_closures"],
-})
+table = durations_table(by_month, "Created", by_month["created_month"].dt.strftime("%b %Y"))
 st.dataframe(table.iloc[::-1], hide_index=True, use_container_width=True)

@@ -5,6 +5,8 @@ publication_id, so they stay cached for the life of a Publication. Queries are
 cut off after 60 s so the dashboard cannot hog the shared warehouse.
 """
 
+from typing import NamedTuple
+
 import pandas as pd
 import streamlit as st
 from snowflake.connector import SnowflakeConnection
@@ -50,6 +52,24 @@ def data_coverage(publication_id: str) -> pd.Series:
     return _frame("SELECT * FROM APP.PUBLISHED_DATA_COVERAGE WHERE publication_id = %s", (publication_id,)).iloc[0]
 
 
+class GroupFilter(NamedTuple):
+    """Problem, agency and borough to narrow to; None means all."""
+
+    problem: str | None = None
+    agency: str | None = None
+    borough: str | None = None
+
+
+# Per-day outputs and the Overdue Queue are summed over the groups a filter
+# matches; duration rows are read as stored, since medians do not add up.
+_GROUP_FILTER = " AND (%s IS NULL OR problem = %s) AND (%s IS NULL OR agency = %s) AND (%s IS NULL OR borough = %s)"
+_ROLLUP_FILTER = " AND problem IS NOT DISTINCT FROM %s AND agency IS NOT DISTINCT FROM %s AND borough IS NOT DISTINCT FROM %s"
+
+
+def _group_params(f: GroupFilter) -> tuple:
+    return (f.problem, f.problem, f.agency, f.agency, f.borough, f.borough)
+
+
 # Problem / agency / borough combinations with their Request counts, for the
 # filters (from the all-time duration rollup, so no extra scan).
 @st.cache_data(max_entries=2)
@@ -62,43 +82,33 @@ def groups(publication_id: str) -> pd.DataFrame:
     )
 
 
-# Filters are None for "all". Per-day outputs are summed over the matching
-# groups; duration rows are read as stored, since medians do not add up.
-_GROUP_FILTER = " AND (%s IS NULL OR problem = %s) AND (%s IS NULL OR agency = %s) AND (%s IS NULL OR borough = %s)"
-_ROLLUP_FILTER = " AND problem IS NOT DISTINCT FROM %s AND agency IS NOT DISTINCT FROM %s AND borough IS NOT DISTINCT FROM %s"
-
-
-def _group_params(problem: str | None, agency: str | None, borough: str | None) -> tuple:
-    return (problem, problem, agency, agency, borough, borough)
-
-
 @st.cache_data(max_entries=32)
-def daily_stats(publication_id: str, problem: str | None, agency: str | None, borough: str | None) -> pd.DataFrame:
+def daily_stats(publication_id: str, f: GroupFilter) -> pd.DataFrame:
     return _frame(
         "SELECT stat_date, SUM(submitted) AS submitted, SUM(closed) AS closed"
         " FROM APP.PUBLISHED_DAILY_REQUEST_STATS WHERE publication_id = %s" + _GROUP_FILTER
         + " GROUP BY stat_date ORDER BY stat_date",
-        (publication_id, *_group_params(problem, agency, borough)),
+        (publication_id, *_group_params(f)),
     )
 
 
 @st.cache_data(max_entries=32)
-def backlog(publication_id: str, problem: str | None, agency: str | None, borough: str | None) -> pd.DataFrame:
+def backlog(publication_id: str, f: GroupFilter) -> pd.DataFrame:
     return _frame(
         "SELECT backlog_date, kind, SUM(open_requests) AS open_requests"
         " FROM APP.PUBLISHED_BACKLOG_DAILY WHERE publication_id = %s" + _GROUP_FILTER
         + " GROUP BY backlog_date, kind ORDER BY backlog_date",
-        (publication_id, *_group_params(problem, agency, borough)),
+        (publication_id, *_group_params(f)),
     )
 
 
 @st.cache_data(max_entries=32)
-def durations(publication_id: str, problem: str | None, agency: str | None, borough: str | None) -> pd.DataFrame:
+def durations(publication_id: str, f: GroupFilter) -> pd.DataFrame:
     """One row per creation month, plus the all-time row (created_month NULL) first."""
     return _frame(
         "SELECT * EXCLUDE publication_id FROM APP.PUBLISHED_DURATION_STATS WHERE publication_id = %s" + _ROLLUP_FILTER
         + " ORDER BY created_month NULLS FIRST",
-        (publication_id, problem, agency, borough),
+        (publication_id, f.problem, f.agency, f.borough),
     )
 
 
@@ -114,10 +124,9 @@ def borough_durations(publication_id: str, problem: str | None) -> pd.DataFrame:
 
 
 @st.cache_data(max_entries=32)
-def geo_cells(publication_id: str, problem: str | None) -> pd.DataFrame:
+def geo_cells(publication_id: str, problem: str) -> pd.DataFrame:
     return _frame(
-        "SELECT * EXCLUDE publication_id FROM APP.PUBLISHED_GEO_CELLS"
-        " WHERE publication_id = %s AND problem IS NOT DISTINCT FROM %s",
+        "SELECT * EXCLUDE publication_id FROM APP.PUBLISHED_GEO_CELLS WHERE publication_id = %s AND problem = %s",
         (publication_id, problem),
     )
 
@@ -131,14 +140,21 @@ def overdue_groups(publication_id: str) -> pd.DataFrame:
     )
 
 
+@st.cache_data(max_entries=32)
+def overdue_count(publication_id: str, f: GroupFilter) -> int:
+    row = _frame(
+        "SELECT COUNT(*) AS n FROM APP.PUBLISHED_OVERDUE_QUEUE WHERE publication_id = %s" + _GROUP_FILTER,
+        (publication_id, *_group_params(f)),
+    )
+    return int(row["n"].iloc[0])
+
+
 @st.cache_data(max_entries=64)
-def overdue_page(
-    publication_id: str, problem: str | None, agency: str | None, borough: str | None, page: int, page_size: int
-) -> pd.DataFrame:
+def overdue_page(publication_id: str, f: GroupFilter, page: int, page_size: int) -> pd.DataFrame:
     """One page of the Overdue Queue, oldest first."""
     return _frame(
         "SELECT unique_key, problem, agency, borough, status, created_at_local, hours_open"
         " FROM APP.PUBLISHED_OVERDUE_QUEUE WHERE publication_id = %s" + _GROUP_FILTER
         + " ORDER BY created_at_local, unique_key LIMIT %s OFFSET %s",
-        (publication_id, *_group_params(problem, agency, borough), page_size, page * page_size),
+        (publication_id, *_group_params(f), page_size, page * page_size),
     )

@@ -216,6 +216,8 @@ BEGIN
   FROM ANALYTICS.REQUEST_FACTS
   GROUP BY CUBE (DATE_TRUNC('month', created_date_local), problem, agency, borough);
 
+  -- Per Problem only: an all-Problems row beside them would let a reader
+  -- subtract one from the other and recover a cell's count under 20.
   -- A NULL h3_cell is always "no location": cells are never rolled up.
   INSERT INTO ANALYTICS.PUB_GEO_CELLS
   WITH cells AS (
@@ -227,7 +229,7 @@ BEGIN
       COUNT_IF(closed_within_horizon) AS closed_within_horizon,
       MEDIAN(hours_to_close)          AS median_hours
     FROM ANALYTICS.REQUEST_FACTS
-    GROUP BY GROUPING SETS ((problem, h3_cell), (h3_cell))
+    GROUP BY problem, h3_cell
   ),
   kinds AS (
     SELECT *, CASE WHEN h3_cell IS NULL THEN 'no_location' WHEN requests >= 20 THEN 'cell' ELSE 'hidden' END AS cell_kind
@@ -241,7 +243,7 @@ BEGIN
   GROUP BY problem, cell_kind, IFF(cell_kind = 'cell', h3_cell, NULL);
 
   INSERT INTO ANALYTICS.PUB_OVERDUE_QUEUE
-  SELECT :pid, unique_key, problem, agency, borough, status, created_at_local, DATEDIFF(hour, created_at_utc, as_of_utc)
+  SELECT :pid, unique_key, problem, agency, borough, status, created_at_local, FLOOR(DATEDIFF(second, created_at_utc, as_of_utc) / 3600)
   FROM ANALYTICS.REQUEST_FACTS
   WHERE overdue;
 
@@ -290,7 +292,7 @@ BEGIN
   ) AS b,
   (
     SELECT COALESCE(SUM(requests), 0) AS requests, COUNT_IF(cell_kind = 'cell' AND requests < 20) AS small_cells
-    FROM ANALYTICS.PUB_GEO_CELLS WHERE publication_id = :pid AND problem IS NULL
+    FROM ANALYTICS.PUB_GEO_CELLS WHERE publication_id = :pid
   ) AS g,
   (SELECT COUNT(*) AS n FROM ANALYTICS.PUB_OVERDUE_QUEUE WHERE publication_id = :pid) AS q,
   (SELECT COUNT(*) AS n, COUNT(DISTINCT unique_key) AS distinct_keys FROM CLEAN.SERVICE_REQUESTS) AS cr;
