@@ -23,6 +23,12 @@ def changed(key: str, updated_at: str, created: str = "2026-10-20T08:00:00.000",
     return request(key, created, **{":updated_at": updated_at, **fields})
 
 
+def hold_lease(store, name: str, owner: str, until: datetime) -> None:
+    """A lease left by another collector, as it stores it."""
+    record = {"owner": owner, "renewed_at": DAY_1.isoformat(), "expires_at": until.isoformat()}
+    store.put(f"checkpoints/leases/{name}.json", json.dumps(record).encode())
+
+
 def cursor_state(store) -> dict:
     return json.loads(store.get(CURSOR_KEY))
 
@@ -96,6 +102,17 @@ def test_page_boundaries_inside_an_updated_at_tie_neither_skip_nor_duplicate(sto
 
     assert keys(store, manifest) == ["300", "201", "202", "203", "204", "205", "100"]
     assert [f["rows"] for f in manifest["files"]] == [2, 2, 2, 1]
+
+
+def test_cursor_passes_write_to_the_auto_ingested_prefix_and_slices_to_the_bulk_one(store):
+    cursor = make_collector(FakeSocrata([changed("1", "2026-10-24T01:33:15.966Z")]), store, clock=lambda: DAY_1).run(PLAN)
+    september = creation_day_partitions(datetime(2026, 9, 1).date(), days=1)
+    sliced = make_collector(FakeSocrata([request("2", "2026-09-01T08:00:00.000")]), store, clock=lambda: DAY_1).run(
+        Plan("slice", september)
+    )
+
+    assert [f["key"].split("/")[1] for f in cursor["files"]] == ["daily"]
+    assert [f["key"].split("/")[1] for f in sliced["files"]] == ["bulk"]
 
 
 def test_an_empty_pass_completes_and_keeps_the_cursor(store):
@@ -234,10 +251,7 @@ def test_a_new_pass_never_reuses_an_existing_run_id(store):
 
 def test_lease_left_by_a_killed_collector_blocks_until_it_expires(store):
     # A Lambda killed at its timeout never releases: simulate its lease.
-    store.put(
-        "checkpoints/leases/cursor-311.json",
-        json.dumps({"owner": "killed", "renewed_at": DAY_1.isoformat(), "expires_at": (DAY_1 + timedelta(minutes=16)).isoformat()}).encode(),
-    )
+    hold_lease(store, "cursor-311", "killed", until=DAY_1 + timedelta(minutes=16))
     fake = FakeSocrata(rows_for_three_pages())
 
     with pytest.raises(LeaseHeld, match="killed"):
@@ -250,10 +264,7 @@ def test_lease_left_by_a_killed_collector_blocks_until_it_expires(store):
 
 def test_partition_runs_lease_per_run_id(store):
     september = creation_day_partitions(datetime(2026, 9, 1).date(), days=1)
-    store.put(
-        "checkpoints/leases/run-backfill.json",
-        json.dumps({"owner": "other", "renewed_at": DAY_1.isoformat(), "expires_at": (DAY_1 + timedelta(hours=1)).isoformat()}).encode(),
-    )
+    hold_lease(store, "run-backfill", "other", until=DAY_1 + timedelta(hours=1))
 
     with pytest.raises(LeaseHeld):
         make_collector(FakeSocrata([]), store, clock=lambda: DAY_1).run(Plan("backfill", september))
@@ -272,10 +283,7 @@ def test_lambda_pass_continues_itself_when_paused_and_skips_when_another_holds_t
     done = run_pass(continued[0], collector, PLAN, DAY_1 + timedelta(hours=1), continued.append)
     assert done["outcome"] == "complete" and done["rows"] == 5 and len(continued) == 1
 
-    store.put(
-        "checkpoints/leases/cursor-311.json",
-        json.dumps({"owner": "other", "renewed_at": DAY_2.isoformat(), "expires_at": (DAY_2 + timedelta(hours=1)).isoformat()}).encode(),
-    )
+    hold_lease(store, "cursor-311", "other", until=DAY_2 + timedelta(hours=1))
     late = make_collector(FakeSocrata([]), store, clock=lambda: DAY_2)
     assert run_pass({}, late, PLAN, DAY_2 + timedelta(hours=1), continued.append)["outcome"] == "skipped"
 

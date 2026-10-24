@@ -6,7 +6,7 @@ cursor minus an overlap.
 
 Storage layout (all keys relative to the bucket):
 
-    data/extract_date=YYYY-MM-DD/run_id=<run>/<partition>/part-NNNNN.ndjson.gz
+    data/<channel>/extract_date=YYYY-MM-DD/run_id=<run>/<partition>/part-NNNNN.ndjson.gz
     manifests/extract_date=YYYY-MM-DD/run_id=<run>/manifest.json
     checkpoints/runs/<run>/run.json
     checkpoints/runs/<run>/partitions/<partition>.json
@@ -38,10 +38,16 @@ SCOPE_START = datetime(2025, 1, 1)
 
 @dataclass(frozen=True)
 class Plan:
-    """Collect fixed partitions under one run ID; rerun the same ID to resume."""
+    """Collect fixed partitions under one run ID; rerun the same ID to resume.
+
+    `channel` picks the data prefix: cursor passes write data/daily/, which
+    Snowpipe auto-ingests; slices and backfill write data/bulk/, which only
+    bulk COPY loads. One prefix per load path, so no file loads twice.
+    """
 
     run_id: str
     partitions: Sequence[Window]
+    channel: str = "bulk"
 
     @property
     def lease_name(self) -> str:
@@ -124,14 +130,14 @@ class Collector:
         if state["pending"] is None:
             since = _source_timestamp(_parse_source_timestamp(state["updated_at"]) - plan.overlap)
             run_id = f"cursor-{self._clock():%Y%m%dT%H%M%SZ}"
-            if self._store.get(RunLayout(run_id, "").run_key) is not None:
+            if self._store.get(run_state_key(run_id)) is not None:
                 raise ValueError(f"run {run_id} already exists; start the next pass later")
             state["pending"] = {"run_id": run_id, "updated_after": since}
             self._store.put(key, _json_bytes(state))
         pending = state["pending"]
         window = UpdateWindow(updated_after=pending["updated_after"], created_from=plan.created_from)
 
-        manifest = self._run_partitions(Plan(pending["run_id"], [window]), lease, stop_at)
+        manifest = self._run_partitions(Plan(pending["run_id"], [window], channel="daily"), lease, stop_at)
 
         # Files and manifest are stored: only now may the cursor move.
         last = manifest["partitions"][0]["last_position"]
@@ -143,18 +149,18 @@ class Collector:
 
     def _run_partitions(self, plan: Plan, lease: Lease, stop_at: datetime | None) -> dict:
         run_state = self._start_or_resume(plan)
-        layout = RunLayout(plan.run_id, run_state["extract_date"])
+        layout = RunLayout(plan.run_id, run_state["extract_date"], plan.channel)
         manifest = self._stored_manifest(layout)
         if manifest is None:
             partitions = [self._collect_partition(layout, window, lease, stop_at) for window in plan.partitions]
             manifest = self._write_manifest(layout, partitions)
         if run_state["state"] != "complete":
             run_state["state"] = "complete"
-            self._store.put(layout.run_key, _json_bytes(run_state))
+            self._store.put(run_state_key(layout.run_id), _json_bytes(run_state))
         return manifest
 
     def _start_or_resume(self, plan: Plan) -> dict:
-        key = RunLayout(plan.run_id, "").run_key
+        key = run_state_key(plan.run_id)
         partition_ids = [w.id for w in plan.partitions]
         stored = self._store.get(key)
         if stored is not None:
@@ -237,20 +243,24 @@ class RunLayout:
 
     run_id: str
     extract_date: str
-
-    @property
-    def run_key(self) -> str:
-        return f"checkpoints/runs/{self.run_id}/run.json"
+    channel: str
 
     def checkpoint_key(self, window: Window) -> str:
         return f"checkpoints/runs/{self.run_id}/partitions/{window.id}.json"
 
     def data_key(self, window: Window, index: int) -> str:
-        return f"data/extract_date={self.extract_date}/run_id={self.run_id}/{window.id}/part-{index:05d}.ndjson.gz"
+        return (
+            f"data/{self.channel}/extract_date={self.extract_date}/run_id={self.run_id}"
+            f"/{window.id}/part-{index:05d}.ndjson.gz"
+        )
 
     @property
     def manifest_key(self) -> str:
         return f"manifests/extract_date={self.extract_date}/run_id={self.run_id}/manifest.json"
+
+
+def run_state_key(run_id: str) -> str:
+    return f"checkpoints/runs/{run_id}/run.json"
 
 
 def _new_checkpoint(window: Window) -> dict:

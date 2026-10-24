@@ -96,8 +96,9 @@ resource "aws_s3_bucket_lifecycle_configuration" "observations" {
   }
 }
 
-# New Observation files under data/ (and nothing else) notify Snowpipe's
-# Snowflake-managed SQS queue.
+# New Observation files from daily cursor passes (data/daily/, and nothing
+# else) notify Snowpipe's Snowflake-managed SQS queue. Slices and backfill
+# write data/bulk/, which only bulk COPY loads, so no file loads twice.
 resource "aws_s3_bucket_notification" "snowpipe" {
   count  = var.snowpipe_queue_arn == null ? 0 : 1
   bucket = aws_s3_bucket.observations.id
@@ -106,7 +107,7 @@ resource "aws_s3_bucket_notification" "snowpipe" {
     id            = "snowpipe-data"
     queue_arn     = var.snowpipe_queue_arn
     events        = ["s3:ObjectCreated:*"]
-    filter_prefix = local.prefixes.data
+    filter_prefix = "${local.prefixes.data}daily/"
   }
 }
 

@@ -409,7 +409,7 @@ Use workload IAM roles instead of static AWS access keys. Store runtime secrets 
 
 Block public S3 access and enable encryption. Restrict ECS inbound traffic to the load balancer security group. Configure outbound connectivity needed for Snowflake, image pulls, secrets, and logging. Private subnets need an explicit egress plan; NAT gateways can materially affect a small project's budget.
 
-Use Terraform for reproducible AWS resources and reviewed SQL migrations for Snowflake objects. Separate development and production within one account each: Snowflake databases `NYC311_DEV` and `NYC311` share one X-Small warehouse, and AWS resources carry `dev-`/`prod-` prefixes through Terraform environment folders. Dev runs only on small fixture slices; only prod runs daily. Protect persistent data from accidental destruction and review plans before applying destructive changes.
+Use Terraform for reproducible AWS resources and reviewed SQL migrations for Snowflake objects. Separate development and production within one account each: Snowflake databases `NYC311_DEV` and `NYC311` share one X-Small warehouse, and AWS resources carry `dev-`/`prod-` prefixes through Terraform environment folders. Dev runs only on small fixture slices; only prod runs daily. Temporary exception: until prod exists, dev runs the daily collector (Lambda, schedule, Snowpipe, readiness tasks) so the daily path can be proven end to end. Disable the dev schedule when prod's starts (ticket 06). Protect persistent data from accidental destruction and review plans before applying destructive changes.
 
 ## 14. Monitoring, failure handling, and recovery
 

@@ -32,3 +32,13 @@
 - Smoke test (2026-10-24 02:40 UTC): a manual invoke completed with 0 rows, because the source had not published its 2026-10-24 batch yet. The cursor stayed at the seed (2026-10-23T20:16:00.000Z).
 - Remaining: the demo after the 06:00 UTC scheduled run. Snapshot table: `OPS.DEMO_06_OPEN_BEFORE` (4,706 Requests not Closed).
 
+
+**2026-10-24 (agent): review fixes, migration V009.**
+Two-axis review of 94ca3db; these are the fixes:
+- **Story 38, both directions.** Cursor passes write `data/daily/`; slices and backfill write `data/bulk/`. The pipe (V009) and the S3 notification read only `data/daily/`, so a backfill file can never reach RAW through both paths. Bulk COPY's landing guard stays as a second line.
+- **Double loads are recorded, not hidden.** Reconciliation still counts distinct rows, but `OPS.PIPELINE_RUNS.duplicate_rows` records extra copies.
+- **Zero-row runs.** New `OPS.READINESS_SWEEP_TASK` runs daily at 07:45 UTC whatever the stream holds, so an empty pass's manifest loads and the run is consumed.
+- **Stuck-run alerting (§6).** `PROCESS_READY_RUNS` commits its bookkeeping, then raises `-20001` if a run has waited more than 6 hours or a pending file has had no reconciled run for 6 hours. The task failure is the signal. Ticket 13 wires task failures to alerts.
+- **Dev runs daily: recorded exception** (owner chose this, 2026-10-24) in instruction.md §13. Disable the dev schedule when prod's starts.
+- **Seam 2 readiness tests** now assert on `APP.OVERVIEW_DAILY`, `APP.DATA_COVERAGE` and `OPS.PIPELINE_RUNS`, not CLEAN or RAW. The pipe-definition text test is dropped; the channel split is a Seam 1 test. There are new tests for an empty pass and a stale run.
+- **Left as judgement calls:** the dict cursor state and the string run state.

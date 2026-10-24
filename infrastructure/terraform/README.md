@@ -40,4 +40,4 @@ aws lambda invoke --region us-east-2 --function-name dev-nyc311-collector \
 
 ## Snowpipe notifications
 
-New objects under `data/` notify the Snowpipe `RAW.OBSERVATIONS_PIPE`. Its SQS queue ARN comes from `SHOW PIPES IN DATABASE NYC311_DEV` (`notification_channel`) and is set as `snowpipe_queue_arn` in `environments/dev/main.tf`. The queue is owned by Snowflake, one per Snowflake account, so a recreated pipe usually keeps the same ARN.
+New objects under `data/daily/` (daily cursor passes) notify the Snowpipe `RAW.OBSERVATIONS_PIPE`. Slices and backfill write `data/bulk/`, which only bulk COPY (`python -m warehouse.pipeline`) loads, so no file is loaded by both. Its SQS queue ARN comes from `SHOW PIPES IN DATABASE NYC311_DEV` (`notification_channel`) and is set as `snowpipe_queue_arn` in `environments/dev/main.tf`. The queue is owned by Snowflake, one per Snowflake account, so a recreated pipe usually keeps the same ARN.

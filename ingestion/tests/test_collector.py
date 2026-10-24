@@ -165,7 +165,7 @@ def test_rows_missing_a_required_field_are_a_schema_break_and_nothing_is_written
     with pytest.raises(SchemaError, match=required):
         make_collector(fake, store).run(ONE_DAY)
 
-    assert store.get("data/extract_date=2026-09-10/run_id=one-day/created-20260901T0000-20260902T0000/part-00000.ndjson.gz") is None
+    assert store.get("data/bulk/extract_date=2026-09-10/run_id=one-day/created-20260901T0000-20260902T0000/part-00000.ndjson.gz") is None
 
 
 THREE_DAYS = creation_day_partitions(date(2026, 9, 1), days=3)
@@ -214,17 +214,8 @@ class CrashOnCheckpointStore:
         self._inner = inner
         self._remaining = crash_on_checkpoint
 
-    def get(self, key):
-        return self._inner.get(key)
-
-    def put_if_absent(self, key, data):
-        return self._inner.put_if_absent(key, data)
-
-    def get_versioned(self, key):
-        return self._inner.get_versioned(key)
-
-    def replace_if_match(self, key, data, etag):
-        return self._inner.replace_if_match(key, data, etag)
+    def __getattr__(self, name):
+        return getattr(self._inner, name)
 
     def put(self, key, data):
         if "/partitions/" in key:
@@ -237,7 +228,7 @@ class CrashOnCheckpointStore:
 def test_file_stored_before_a_crash_is_kept_not_overwritten_and_not_duplicated(tmp_path):
     local = LocalObjectStore(tmp_path / "bucket")
     plan = Plan(run_id="adopt", partitions=SEPT_1)
-    first_file = "data/extract_date=2026-09-10/run_id=adopt/created-20260901T0000-20260902T0000/part-00000.ndjson.gz"
+    first_file = "data/bulk/extract_date=2026-09-10/run_id=adopt/created-20260901T0000-20260902T0000/part-00000.ndjson.gz"
 
     with pytest.raises(SimulatedCrash):
         make_collector(FakeSocrata(three_days_of_requests()), CrashOnCheckpointStore(local, 1), page_size=2).run(plan)
