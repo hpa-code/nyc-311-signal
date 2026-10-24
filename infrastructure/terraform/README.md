@@ -46,14 +46,15 @@ New objects under `data/daily/` (daily cursor passes) notify the Snowpipe `RAW.O
 
 `modules/backfill` holds the collector image (ECR `dev-nyc311-collector`), the `dev-nyc311` ECS cluster and the one-off Fargate task `dev-nyc311-backfill`, which runs `python -m ingestion.backfill --through 2026-10` under the ingestion role: run `backfill-202501-202610`, one partition per creation month, written to `data/bulk/`. Nothing schedules it.
 
-Build and push the image (Apple silicon builds arm64 natively, which the task uses):
+Build and push the image, tagged with the commit it is built from (Apple silicon builds arm64 natively, which the task uses). Tags are immutable, so a resumed run never picks up different code. Then set `image_tag` in `environments/dev/main.tf` to that SHA and apply, which registers a new task definition revision:
 
 ```sh
-cd ../../../..   # repo root
+cd ../../../..   # repo root, on a clean commit
+TAG=$(git rev-parse --short HEAD)
 REPO=$(terraform -chdir=infrastructure/terraform/environments/dev output -raw backfill_repository_url)
 aws ecr get-login-password --region us-east-2 | docker login --username AWS --password-stdin "${REPO%%/*}"
-docker build --platform linux/arm64 -f ingestion/Dockerfile -t "${REPO}:latest" .
-docker push "${REPO}:latest"
+docker build --platform linux/arm64 -f ingestion/Dockerfile -t "${REPO}:${TAG}" .
+docker push "${REPO}:${TAG}"
 ```
 
 Start it, and stop it (ECS sends SIGTERM, then SIGKILL after 30 s):
@@ -66,7 +67,7 @@ aws ecs run-task --region us-east-2 --cluster "$($TF backfill_cluster_name)" --l
 aws ecs stop-task --region us-east-2 --cluster dev-nyc311 --task <task-arn>
 ```
 
-Starting it again resumes: complete months are skipped and the interrupted month continues from its last stored page. A killed task never releases its lease, so the new task first waits up to 16 minutes for it to expire. Progress, at any time:
+Starting it again resumes: complete months are skipped and the interrupted month continues from its last stored page. A killed task never releases its lease, so the new task first waits for it to expire (the lease lasts 16 minutes; it waits up to 20). Progress, at any time:
 
 ```sh
 uv run --env-file .env python -m ingestion.backfill --through 2026-10 --store s3:$(terraform -chdir=infrastructure/terraform/environments/dev output -raw bucket_name) --status

@@ -24,3 +24,13 @@
 - **Load:** 11 minutes for 22 months, 0 quarantined. It published `20261024T191225-52d8ed6a`, not stale.
 - **Report:** every month from 2025-01 to 2026-10 has source = manifest = RAW = Current Requests (e.g. 2025-01: 348,180). Current Requests total 6,889,517, created 2025-01-01 to 2026-10-23. RAW holds 7,510,623 Observations, the backfill plus the daily passes.
 - Left as is: a stop takes 30 s to become a kill (no init process in the image). Harmless, since resume handles either.
+
+**2026-10-24 (agent): review fixes.**
+Two-axis review of 8d5fe37. Fixes:
+- **Readiness gate (story 39).** `warehouse.backfill load` now checks each month against its manifest before processing it: every file and every row must be in RAW, or it raises `MonthMismatch` and processes nothing of that month. `pipeline.process(only_run=...)` refuses, and changes nothing, if the stream holds Observations of another run. A daily pass Snowpipe loads mid-load stays for `OPS.PROCESS_READY_RUNS`. The check runs inside the processing transaction, where the stream is one snapshot. There are Seam 2 tests for both.
+- **Reproducible image.** The Dockerfile installs from `uv.lock` (`uv export`, hash-checked), not a hand pin. ECR tags are now immutable, and the task definition runs `image_tag`, the commit SHA the image was built from. A resumed run can't pick up different code.
+- **Report.** RAW rows are counted per data file's partition, not by parsing the payload. The docstring says it is a snapshot for right after the load: later daily passes and source edits show as DIFF.
+- **Smells.** `CreationWindow.month`, `RunLayout.partition_prefix`, and one `parse_month` and `month_windows` shared by both CLIs. `LEASE_WAIT` derives from the collector's `LEASE_TTL`, and the README now matches it. `RunLayout.checkpoint_key` was dropped (it only forwarded).
+- **Left as is:**
+  - The checkpoint checksum is stored but not re-verified. That would mean re-downloading 1.2 GB, and file SHA-256s are already in the manifest.
+  - The task runs under the existing ingestion role, which `modules/core` already trusts for ECS tasks, rather than its own role. Same permissions, one role.

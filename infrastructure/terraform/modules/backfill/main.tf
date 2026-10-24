@@ -29,6 +29,11 @@ variable "socrata_secret_name" {
   type = string
 }
 
+variable "image_tag" {
+  description = "Commit SHA of the collector image to run. Tags are immutable, so a resumed run uses the same code."
+  type        = string
+}
+
 variable "through" {
   description = "Last creation month to backfill, YYYY-MM. Fixed, so a rerun resumes the same run."
   type        = string
@@ -40,7 +45,7 @@ locals {
 
 resource "aws_ecr_repository" "collector" {
   name                 = "${var.environment}-nyc311-collector"
-  image_tag_mutability = "MUTABLE"
+  image_tag_mutability = "IMMUTABLE"
 
   image_scanning_configuration {
     scan_on_push = true
@@ -106,7 +111,7 @@ resource "aws_ecs_task_definition" "backfill" {
 
   container_definitions = jsonencode([{
     name      = "backfill"
-    image     = "${aws_ecr_repository.collector.repository_url}:latest"
+    image     = "${aws_ecr_repository.collector.repository_url}:${var.image_tag}"
     essential = true
     command   = ["--through", var.through]
     environment = [

@@ -74,14 +74,30 @@ PROCESS_STEPS = {
 }
 
 
-def process(conn: SnowflakeConnection) -> dict[str, int]:
+class OtherRunsPending(Exception):
+    """Observations from other runs are waiting; the readiness task owns them."""
+
+
+def process(conn: SnowflakeConnection, only_run: str | None = None) -> dict[str, int]:
     """Quarantine, Request Versions and Current Requests for every pending Observation.
     All-or-nothing: the stream offset only advances if every step commits.
-    Holds the pipeline lock, like the readiness procedure, so publishing waits."""
+    Holds the pipeline lock, like the readiness procedure, so publishing waits.
+
+    With `only_run`, refuses (and changes nothing) if the stream also holds
+    Observations of another run, so a manual load never processes a run the
+    readiness check has not reconciled. Inside the transaction the stream shows
+    one snapshot, so what is checked is exactly what is processed."""
     cur = conn.cursor()
     cur.execute("BEGIN")
     try:
         conn.execute_string(read("transformations/take_pipeline_lock.sql"))
+        if only_run is not None:
+            row = cur.execute(
+                "SELECT COUNT(*) FROM RAW.NEW_OBSERVATIONS WHERE run_id IS DISTINCT FROM %s", (only_run,)
+            ).fetchone()
+            assert isinstance(row, tuple)
+            if row[0]:
+                raise OtherRunsPending(f"{row[0]} Observations of other runs are pending; let the readiness task take them")
         # Each step's last statement is the one whose result we report.
         last = {name: list(conn.execute_string(read(path)))[-1] for name, path in PROCESS_STEPS.items()}
         cur.execute("COMMIT")

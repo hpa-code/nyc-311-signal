@@ -1,3 +1,5 @@
-# The collector image needs only the ingestion package (without its tests).
+# The collector image needs only the lockfile and the ingestion package (without its tests).
 *
+!pyproject.toml
+!uv.lock
 !ingestion/*.py

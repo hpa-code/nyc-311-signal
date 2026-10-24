@@ -80,6 +80,11 @@ class CreationWindow:
         return f"created-{self.start:%Y%m%dT%H%M}-{self.end:%Y%m%dT%H%M}"
 
     @property
+    def month(self) -> str:
+        """The creation month it starts in, YYYY-MM."""
+        return f"{self.start:%Y-%m}"
+
+    @property
     def bounds(self) -> dict:
         return {"created_from": self.start.isoformat(), "created_before": self.end.isoformat()}
 

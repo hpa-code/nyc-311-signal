@@ -7,8 +7,19 @@ import pytest
 from ingestion.api_client import SourceClient
 from ingestion.backfill import backfill_plan
 from ingestion.tests.fake_socrata import FakeSocrata
-from warehouse.backfill import BackfillIncomplete, load, report
-from warehouse.tests.fixtures import EXTRACTED, STAGES, collect, put_collected, source_row
+from warehouse.backfill import BackfillIncomplete, MonthMismatch, load, report
+from warehouse.pipeline import OtherRunsPending, load_observations
+from warehouse.tests.fixtures import (
+    EXTRACTED,
+    FIXTURE_STAGE,
+    STAGES,
+    collect,
+    observation,
+    payload,
+    put_collected,
+    source_row,
+    stage_observation_file,
+)
 
 PLAN = backfill_plan(through=date(2025, 2, 1))
 ROWS = [
@@ -50,3 +61,34 @@ def test_backfill_waits_for_its_manifest_before_loading_anything(empty_db, tmp_p
         load(empty_db, PLAN, STAGES)
     [[raw]] = empty_db.cursor().execute("SELECT COUNT(*) FROM RAW.RAW_311_OBSERVATIONS").fetchall()
     assert raw == 0
+
+
+def count(conn, sql: str) -> int:
+    [[n]] = conn.cursor().execute(sql).fetchall()
+    return n
+
+
+def test_a_month_missing_a_file_stops_before_it_is_processed(empty_db, tmp_path):
+    manifest = collect(tmp_path, ROWS, PLAN, EXTRACTED, page_size=1)
+    february = [f["key"] for f in manifest["files"] if "created-20250201" in f["key"]]
+    put_collected(empty_db, tmp_path, "data", keys=[f["key"] for f in manifest["files"] if f["key"] not in february])
+    put_collected(empty_db, tmp_path, "manifests")
+
+    with pytest.raises(MonthMismatch, match="2025-02"):
+        load(empty_db, PLAN, STAGES)
+    # January was processed; nothing of February reached Current Requests.
+    assert count(empty_db, "SELECT COUNT(*) FROM CLEAN.SERVICE_REQUESTS") == 2
+
+
+def test_observations_of_another_run_stop_the_load_and_stay_for_the_readiness_task(empty_db, tmp_path):
+    collect(tmp_path, ROWS, PLAN, EXTRACTED)
+    put_collected(empty_db, tmp_path, "data")
+    put_collected(empty_db, tmp_path, "manifests")
+    daily = observation(payload("9", "2026-10-20T08:00:00.000"), "cursor-unreconciled", EXTRACTED)
+    stage_observation_file(empty_db, tmp_path, "daily", [daily])
+    load_observations(empty_db, f"@{FIXTURE_STAGE}/data/daily/")
+
+    with pytest.raises(OtherRunsPending):
+        load(empty_db, PLAN, STAGES)
+    assert count(empty_db, "SELECT COUNT(*) FROM CLEAN.SERVICE_REQUESTS") == 0
+    assert count(empty_db, "SELECT COUNT(*) FROM RAW.NEW_OBSERVATIONS") == 3

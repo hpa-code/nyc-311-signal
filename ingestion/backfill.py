@@ -22,14 +22,21 @@ from collections.abc import Callable
 from datetime import date, datetime, timedelta
 
 from ingestion.api_client import CreationWindow, SourceClient
-from ingestion.collector import SCOPE_START, Collector, Plan, creation_month_partitions, partition_checkpoint_key
+from ingestion.collector import (
+    LEASE_TTL,
+    SCOPE_START,
+    Collector,
+    Plan,
+    creation_month_partitions,
+    partition_checkpoint_key,
+)
 from ingestion.fetch_311 import app_token, open_store
 from ingestion.lease import LeaseHeld
 from ingestion.object_store import ObjectStore
 
 FIRST_MONTH = SCOPE_START.date()
-# A killed task's lease lasts up to the collector's lease TTL (16 minutes).
-LEASE_WAIT = timedelta(minutes=20)
+# Long enough for a killed task's lease to expire.
+LEASE_WAIT = LEASE_TTL + timedelta(minutes=4)
 LEASE_POLL = timedelta(minutes=1)
 
 
@@ -40,6 +47,18 @@ def backfill_plan(through: date) -> Plan:
         run_id=f"backfill-{FIRST_MONTH:%Y%m}-{through:%Y%m}",
         partitions=creation_month_partitions(FIRST_MONTH, through),
     )
+
+
+def parse_month(value: str) -> date:
+    """A --through value, YYYY-MM."""
+    return datetime.strptime(value, "%Y-%m").date()
+
+
+def month_windows(plan: Plan) -> list[CreationWindow]:
+    """The plan's partitions, which for a backfill are all creation months."""
+    windows = [w for w in plan.partitions if isinstance(w, CreationWindow)]
+    assert len(windows) == len(plan.partitions), "a backfill plan has only creation-month partitions"
+    return windows
 
 
 def run_backfill(
@@ -62,24 +81,21 @@ def run_backfill(
 def progress(store: ObjectStore, plan: Plan) -> list[dict]:
     """Each month's checkpoint: complete, in_progress, or not_started."""
     months = []
-    for window in plan.partitions:
-        assert isinstance(window, CreationWindow)
+    for window in month_windows(plan):
         stored = store.get(partition_checkpoint_key(plan.run_id, window))
-        checkpoint: dict = json.loads(stored) if stored is not None else {"state": "not_started", "files": [], "row_count": 0}
+        if stored is None:
+            months.append({"month": window.month, "state": "not_started", "files": 0, "rows": 0})
+            continue
+        checkpoint = json.loads(stored)
         months.append(
-            {
-                "month": f"{window.start:%Y-%m}",
-                "state": checkpoint["state"],
-                "files": len(checkpoint["files"]),
-                "rows": checkpoint["row_count"],
-            }
+            {"month": window.month, "state": checkpoint["state"], "files": len(checkpoint["files"]), "rows": checkpoint["row_count"]}
         )
     return months
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--through", required=True, type=lambda v: datetime.strptime(v, "%Y-%m").date(), help="last creation month, YYYY-MM")
+    parser.add_argument("--through", required=True, type=parse_month, help="last creation month, YYYY-MM")
     parser.add_argument("--store", default=f"s3:{os.environ.get('NYC311_BUCKET', '')}", help="local:<dir> or s3:<bucket>")
     parser.add_argument("--status", action="store_true", help="print each month's progress and exit")
     parser.add_argument("--page-size", type=int, default=10_000)

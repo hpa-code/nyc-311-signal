@@ -34,6 +34,8 @@ from ingestion.object_store import ObjectStore
 SCHEMA_VERSION = 1
 # Project scope: Requests created from this NYC-local moment on.
 SCOPE_START = datetime(2025, 1, 1)
+# A collector killed without releasing its lease blocks others this long.
+LEASE_TTL = timedelta(minutes=16)
 
 
 @dataclass(frozen=True)
@@ -104,7 +106,7 @@ class Collector:
         store: ObjectStore,
         clock: Callable[[], datetime] = utc_now,
         page_size: int = 10_000,
-        lease_ttl: timedelta = timedelta(minutes=16),
+        lease_ttl: timedelta = LEASE_TTL,
     ):
         self._source = source
         self._store = store
@@ -209,7 +211,7 @@ class Collector:
         return manifest
 
     def _collect_partition(self, layout: "RunLayout", window: Window, lease: Lease, stop_at: datetime | None) -> dict:
-        key = layout.checkpoint_key(window)
+        key = partition_checkpoint_key(layout.run_id, window)
         stored = self._store.get(key)
         checkpoint = json.loads(stored) if stored is not None else _new_checkpoint(window)
 
@@ -252,14 +254,12 @@ class RunLayout:
     extract_date: str
     channel: str
 
-    def checkpoint_key(self, window: Window) -> str:
-        return partition_checkpoint_key(self.run_id, window)
+    def partition_prefix(self, window: Window) -> str:
+        """The folder holding one partition's data files."""
+        return f"data/{self.channel}/extract_date={self.extract_date}/run_id={self.run_id}/{window.id}/"
 
     def data_key(self, window: Window, index: int) -> str:
-        return (
-            f"data/{self.channel}/extract_date={self.extract_date}/run_id={self.run_id}"
-            f"/{window.id}/part-{index:05d}.ndjson.gz"
-        )
+        return f"{self.partition_prefix(window)}part-{index:05d}.ndjson.gz"
 
     @property
     def manifest_key(self) -> str:

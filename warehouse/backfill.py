@@ -5,25 +5,28 @@ creation month at a time, then reconcile it month by month.
     uv run --env-file .env python -m warehouse.backfill report --through 2026-10
 
 `load` needs the run's manifest, so it only starts once the backfill is
-complete. Each month's files are bulk-COPYed from their own prefix and
-processed in their own transaction, so no statement grows with the whole
-backfill (the warehouse stops statements at 600 s). Rerunning is safe: COPY's
-load history and RAW's source_file check skip files already loaded. One
-Publication follows the last month.
+complete. Each month's files are bulk-COPYed from their own prefix, checked
+against the manifest (every file, every row), and only then processed, in
+their own transaction, so no statement grows with the whole backfill (the
+warehouse stops statements at 600 s). If Observations of another run are
+waiting (a daily pass Snowpipe just loaded), it stops: those belong to the
+readiness task. Rerunning is safe: COPY's load history and RAW's source_file
+check skip files already loaded. One Publication follows the last month.
 
 `report` prints, per month, the rows the source holds now, the rows the
 manifest recorded, the rows RAW holds from the run, and the distinct Current
-Requests created that month. It exits 1 unless every month agrees.
+Requests created that month, and exits 1 unless every month agrees. It is a
+snapshot for right after the load: later daily passes and source edits move
+the source and Current Request counts, and show as differences.
 """
 
 import argparse
 import sys
-from datetime import datetime
 
 from snowflake.connector import SnowflakeConnection
 
 from ingestion.api_client import CreationWindow, SourceClient
-from ingestion.backfill import backfill_plan
+from ingestion.backfill import backfill_plan, month_windows, parse_month
 from ingestion.collector import Plan, RunLayout
 from ingestion.fetch_311 import app_token
 from warehouse.connection import connect
@@ -35,8 +38,12 @@ class BackfillIncomplete(Exception):
     """The backfill run has no manifest yet: it is still collecting, or stopped."""
 
 
+class MonthMismatch(Exception):
+    """A month's loaded files or rows differ from its manifest; nothing of it was processed."""
+
+
 def load(conn: SnowflakeConnection, plan: Plan, stages: Stages = Stages()) -> dict:
-    """Load and process each month of the plan's run, then publish."""
+    """Load, check and process each month of the plan's run, then publish."""
     load_manifests(conn, stages.manifests)
     row = conn.cursor().execute("SELECT extract_date FROM OPS.RUN_MANIFESTS WHERE run_id = %s", (plan.run_id,)).fetchone()
     if row is None:
@@ -45,13 +52,30 @@ def load(conn: SnowflakeConnection, plan: Plan, stages: Stages = Stages()) -> di
     layout = RunLayout(plan.run_id, row[0].isoformat(), channel="bulk")
 
     months = []
-    for window in _months(plan):
-        # data/bulk/extract_date=.../run_id=.../<partition>/ -> that path in the stage.
-        directory = layout.data_key(window, 0).rsplit("/", 1)[0].removeprefix("data/")
-        loaded = load_observations(conn, f"{stages.observations.rstrip('/')}/{directory}/")
-        months.append({"month": f"{window.start:%Y-%m}", "observations_loaded": loaded} | process(conn))
+    for window in month_windows(plan):
+        prefix = layout.partition_prefix(window)
+        loaded = load_observations(conn, f"{stages.observations.rstrip('/')}/{prefix.removeprefix('data/')}")
+        _check_month(conn, plan.run_id, window, prefix)
+        months.append({"month": window.month, "observations_loaded": loaded} | process(conn, only_run=plan.run_id))
         print(months[-1], flush=True)
     return {"months": months, "publication": publish(conn)["outcome"]}
+
+
+def _check_month(conn: SnowflakeConnection, run_id: str, window: CreationWindow, prefix: str) -> None:
+    cur = conn.cursor()
+    expected = cur.execute(
+        "SELECT COUNT(*), COALESCE(SUM(f.value:rows::NUMBER), 0)"
+        " FROM OPS.RUN_MANIFESTS AS m, LATERAL FLATTEN(m.manifest:files) AS f"
+        " WHERE m.run_id = %s AND f.value:partition::STRING = %s",
+        (run_id, window.id),
+    ).fetchone()
+    loaded = cur.execute(
+        "SELECT COUNT(DISTINCT source_file), COUNT(*) FROM RAW.RAW_311_OBSERVATIONS"
+        " WHERE run_id = %s AND source_file LIKE %s",
+        (run_id, f"%{prefix}%"),
+    ).fetchone()
+    if expected != loaded:
+        raise MonthMismatch(f"{window.month}: manifest has (files, rows) {expected}, RAW has {loaded}")
 
 
 def report(conn: SnowflakeConnection, source: SourceClient, plan: Plan) -> list[dict]:
@@ -64,9 +88,10 @@ def report(conn: SnowflakeConnection, source: SourceClient, plan: Plan) -> list[
             (plan.run_id,),
         ).fetchall()  # type: ignore[arg-type]
     )
+    # Per data file, not per payload: each file holds one partition (month).
     raw = dict(
         cur.execute(
-            "SELECT TO_CHAR(TRY_TO_TIMESTAMP_NTZ(observation:payload:created_date::STRING), 'YYYY-MM'), COUNT(*)"
+            "SELECT REGEXP_SUBSTR(source_file, 'created-[^/]+'), COUNT(*)"
             " FROM RAW.RAW_311_OBSERVATIONS WHERE run_id = %s GROUP BY 1",
             (plan.run_id,),
         ).fetchall()  # type: ignore[arg-type]
@@ -77,28 +102,21 @@ def report(conn: SnowflakeConnection, source: SourceClient, plan: Plan) -> list[
         ).fetchall()  # type: ignore[arg-type]
     )
     rows = []
-    for window in _months(plan):
-        month = f"{window.start:%Y-%m}"
+    for window in month_windows(plan):
         counts = {
             "source_rows": source.count_created(window),
             "manifest_rows": int(manifest.get(window.id, 0)),
-            "raw_rows": int(raw.get(month, 0)),
-            "current_requests": int(current.get(month, 0)),
+            "raw_rows": int(raw.get(window.id, 0)),
+            "current_requests": int(current.get(window.month, 0)),
         }
-        rows.append({"month": month} | counts | {"ok": len(set(counts.values())) == 1})
+        rows.append({"month": window.month} | counts | {"ok": len(set(counts.values())) == 1})
     return rows
-
-
-def _months(plan: Plan) -> list[CreationWindow]:
-    windows = [w for w in plan.partitions if isinstance(w, CreationWindow)]
-    assert len(windows) == len(plan.partitions), "a backfill plan has only creation-month partitions"
-    return windows
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("action", choices=["load", "report"])
-    parser.add_argument("--through", required=True, type=lambda v: datetime.strptime(v, "%Y-%m").date(), help="the backfill's last month, YYYY-MM")
+    parser.add_argument("--through", required=True, type=parse_month, help="the backfill's last month, YYYY-MM")
     args = parser.parse_args(argv)
     plan = backfill_plan(args.through)
     env = DEV
