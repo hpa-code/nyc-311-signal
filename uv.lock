@@ -888,6 +888,7 @@ dependencies = [
 
 [package.dev-dependencies]
 dashboard = [
+    { name = "pydeck" },
     { name = "snowflake-connector-python", extra = ["pandas"] },
     { name = "streamlit" },
 ]
@@ -907,6 +908,7 @@ requires-dist = [{ name = "boto3", specifier = ">=1.43.118" }]
 
 [package.metadata.requires-dev]
 dashboard = [
+    { name = "pydeck", specifier = ">=0.9" },
     { name = "snowflake-connector-python", extras = ["pandas"], specifier = ">=3.12" },
     { name = "streamlit", specifier = ">=1.40" },
 ]

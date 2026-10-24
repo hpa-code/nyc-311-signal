@@ -12,5 +12,11 @@ import streamlit as st
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 st.set_page_config(page_title="NYC 311 Signal", layout="wide")
-page = st.navigation([st.Page("pages/overview.py", title="Overview", default=True)])
+page = st.navigation(
+    [
+        st.Page("pages/overview.py", title="Overview", default=True),
+        st.Page("pages/geographic.py", title="Geographic patterns"),
+        st.Page("pages/overdue.py", title="Overdue Queue"),
+    ]
+)
 page.run()

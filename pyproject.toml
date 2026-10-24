@@ -14,6 +14,7 @@ warehouse = [
 dashboard = [
     "streamlit>=1.40",
     "snowflake-connector-python[pandas]>=3.12",
+    "pydeck>=0.9",
 ]
 dev = [
     "boto3-stubs[s3]>=1.43.118",

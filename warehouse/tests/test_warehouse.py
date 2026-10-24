@@ -77,7 +77,11 @@ def test_dashboard_role_reads_app_views_and_nothing_else(test_env):
         cur.execute("SELECT COUNT(*) FROM APP.DATA_COVERAGE")
         cur.execute("SELECT COUNT(*) FROM APP.TABLEAU_DAILY")
         cur.execute("SELECT COUNT(*) FROM APP.PUBLICATION_STATUS")
-        for view in ("PUBLISHED_OVERVIEW_DAILY", "PUBLISHED_DATA_COVERAGE", "PUBLISHED_TABLEAU_DAILY"):
+        for view in (
+            "PUBLISHED_OVERVIEW_DAILY", "PUBLISHED_DATA_COVERAGE", "PUBLISHED_TABLEAU_DAILY",
+            "PUBLISHED_DAILY_REQUEST_STATS", "PUBLISHED_BACKLOG_DAILY", "PUBLISHED_DURATION_STATS",
+            "PUBLISHED_GEO_CELLS", "PUBLISHED_OVERDUE_QUEUE",
+        ):
             cur.execute(f"SELECT COUNT(*) FROM APP.{view}")
         for forbidden in (
             "SELECT COUNT(*) FROM CLEAN.SERVICE_REQUESTS",
@@ -86,6 +90,8 @@ def test_dashboard_role_reads_app_views_and_nothing_else(test_env):
             "SELECT COUNT(*) FROM OPS.PUBLICATIONS",
             "SELECT COUNT(*) FROM OPS.STEP_STATUS",
             "SELECT COUNT(*) FROM ANALYTICS.PUB_OVERVIEW_DAILY",
+            "SELECT COUNT(*) FROM ANALYTICS.PUB_OVERDUE_QUEUE",
+            "SELECT COUNT(*) FROM ANALYTICS.REQUEST_FACTS",
             "CREATE TABLE APP.SNEAKY (x INT)",
             "CREATE OR REPLACE VIEW APP.OVERVIEW_DAILY AS SELECT 1 AS x",
         ):
