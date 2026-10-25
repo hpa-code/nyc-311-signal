@@ -567,21 +567,21 @@ Raw observations can legitimately contain multiple versions of one request. “N
 
 Demonstrate one request from original S3 observation through RAW, cleaned state, feature snapshot, model score, and dashboard. Then show a later closure observation updating current state while preserving the original prediction for evaluation.
 
-- [ ] Automated daily collection works for new and existing requests.
-- [ ] Large imports resume safely after failure.
-- [ ] Original observations and manifests support replay.
-- [ ] Current tables contain unique identifiers and correctly ordered updates.
-- [ ] Data-quality failures are visible and recoverable.
-- [ ] Label timing and field availability are documented.
-- [ ] Baselines and chronological evaluation use real measured results.
-- [ ] Predictions record model and feature provenance.
-- [ ] Dashboard separates predicted risk from observed overdue status.
-- [ ] Public views contain only approved fields.
-- [ ] A complete publication is visible, with a freshness timestamp.
-- [ ] Monitoring and a recovery drill have been demonstrated.
-- [ ] Infrastructure and deployment are reproducible.
-- [ ] Cost controls and shutdown instructions are documented.
-- [ ] README includes architecture, screenshots, setup, metrics, and limitations.
+- [x] Automated daily collection works for new and existing requests. (Daily cursor pass in dev since 2026-10-24, two passes so far; weekly Reconciliation Pass.)
+- [x] Large imports resume safely after failure. ([Recovery drill](docs/recovery-drill.md); the 6.9M-row backfill.)
+- [x] Original observations and manifests support replay.
+- [x] Current tables contain unique identifiers and correctly ordered updates. (A Publication check; the drill's replay.)
+- [x] Data-quality failures are visible and recoverable. (Quarantine with reasons, Pipeline Health, [runbook](docs/runbook.md).)
+- [x] Label timing and field availability are documented.
+- [x] Baselines and chronological evaluation use real measured results. ([Model card](docs/model-card.md).)
+- [x] Predictions record model and feature provenance.
+- [x] Dashboard separates predicted risk from observed overdue status.
+- [x] Public views contain only approved fields.
+- [x] A complete publication is visible, with a freshness timestamp.
+- [x] Monitoring and a recovery drill have been demonstrated. (CloudWatch alarms in dev; [drill](docs/recovery-drill.md); [trace](docs/end-to-end-trace.md).)
+- [ ] Infrastructure and deployment are reproducible. (Dev infrastructure is applied from Terraform. Prod, the public dashboard and continuous deployment are written and validated, but not yet applied: tickets 14 and 15.)
+- [x] Cost controls and shutdown instructions are documented. ([Costs and shutdown](docs/cost-and-shutdown.md).)
+- [x] README includes architecture, screenshots, setup, metrics, and limitations.
 
 Completion means that the whole path works and its limitations are explained. A sophisticated model is optional; trustworthy data movement, honest evaluation, and a usable application are essential.
 

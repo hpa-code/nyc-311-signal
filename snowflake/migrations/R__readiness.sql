@@ -131,6 +131,13 @@ BEGIN
     WITH runs AS (
       SELECT run_id FROM OPS.PIPELINE_RUNS WHERE ARRAY_CONTAINS(run_id::VARIANT, :ready_run_ids)
     ),
+    -- This batch's Observations by run: a run whose Observations were
+    -- processed earlier (bulk path) gets no credit for their versions here.
+    batch AS (
+      SELECT DISTINCT w.run_id, n.unique_key
+      FROM CLEAN.WORK_NEW_OBSERVATIONS AS n
+      JOIN OPS.WORK_RUN_FILES AS w ON w.file_key = n.source_file
+    ),
     observed AS (
       SELECT
         w.run_id,
@@ -159,6 +166,7 @@ BEGIN
       FROM CLEAN.REQUEST_VERSIONS AS v
       LEFT JOIN watermarks AS wm ON wm.run_id = v.valid_from_run_id
       WHERE v.valid_from_run_id IN (SELECT run_id FROM runs)
+        AND (v.valid_from_run_id, v.unique_key) IN (SELECT run_id, unique_key FROM batch)
       GROUP BY v.valid_from_run_id
     )
     SELECT

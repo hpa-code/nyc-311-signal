@@ -8,11 +8,7 @@ import pytest
 
 from warehouse.connection import connect, credentials_available
 from warehouse.environment import DEV
-from warehouse.migrate import migrate
-from warehouse.pipeline import run
-from warehouse.tests.fixtures import FIXTURE_STAGE, STAGES
-
-SCHEMAS = ("RAW", "CLEAN", "ANALYTICS", "ML", "OPS", "APP")
+from warehouse.tests.fixtures import FIXTURE_STAGE, STAGES, rebuild_test_database
 
 
 def pytest_collection_modifyitems(config, items):
@@ -29,14 +25,7 @@ def test_env():
     env = DEV.for_tests(manifests_stage=STAGES.manifests)
     conn = connect(env.pipeline_role, env.warehouse, env.database)
     try:
-        cur = conn.cursor()
-        for schema in SCHEMAS:
-            cur.execute(f"DROP SCHEMA IF EXISTS {schema} CASCADE")
-        migrate(conn, env)
-        cur.execute(f"CREATE STAGE {FIXTURE_STAGE}")
-        # A stream's first read returns only the rows present when it was created
-        # (none here); later rows wait for the next read. Take that first read now.
-        run(conn, STAGES)
+        rebuild_test_database(conn, env)
         yield conn, env
     finally:
         conn.close()

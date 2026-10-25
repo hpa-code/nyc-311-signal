@@ -57,7 +57,10 @@ if signals["processing_failing"]:
 
 st.subheader("Reconciliation Pass")
 c1, c2, c3 = st.columns(3)
-c1.metric("Last pass", shown(signals["days_since_reconciliation"], "{:.1f} days ago"),
+# Before the first pass, days_since_reconciliation counts from when metrics
+# began (for the alarm); that is not a pass.
+c1.metric("Last pass", "None yet" if pd.isna(signals["reconcile_run_id"])
+          else shown(signals["days_since_reconciliation"], "{:.1f} days ago"),
           help=shown(signals["reconcile_run_id"], "{}"))
 c2.metric("Changes the cursor missed", shown(signals["missed_changes"], "{:,.0f}"),
           help="Requests whose change the latest reconciliation found although the cursor should have collected it. They are taken in.")
@@ -80,9 +83,9 @@ st.dataframe(
         "Distinct Requests": runs["distinct_requests"],
         "Requests with a new Version": runs["updated_requests"],
         "Quarantined": runs["quarantined_rows"],
-        "Missed by cursor": runs["missed_changes"],
-        "Collector min": (runs["collector_seconds"] / 60).round(1),
-        "Source lag h": runs["source_lag_hours"].round(1),
+        "Missed by cursor": pd.to_numeric(runs["missed_changes"]),
+        "Collector min": (pd.to_numeric(runs["collector_seconds"]) / 60).round(1),
+        "Source lag h": pd.to_numeric(runs["source_lag_hours"]).round(1),
     }),
     hide_index=True,
     use_container_width=True,

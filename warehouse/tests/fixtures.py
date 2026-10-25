@@ -11,12 +11,27 @@ from ingestion.api_client import SourceClient
 from ingestion.collector import Collector, CursorPlan, Plan, creation_day_partitions, wrap_observation
 from ingestion.object_store import LocalObjectStore
 from ingestion.tests.fake_socrata import FakeSocrata
-from warehouse.pipeline import Stages
+from warehouse.environment import Environment
+from warehouse.migrate import migrate
+from warehouse.pipeline import Stages, run
 from warehouse.sql import read, render
 
 FIXTURE_STAGE = "RAW.FIXTURE_STAGE"
 STAGES = Stages(observations=f"@{FIXTURE_STAGE}/data/", manifests=f"@{FIXTURE_STAGE}/manifests/")
 EXTRACTED = datetime(2026, 9, 10, 6, 0, tzinfo=timezone.utc)
+SCHEMAS = ("RAW", "CLEAN", "ANALYTICS", "ML", "OPS", "APP")
+
+
+def rebuild_test_database(conn: SnowflakeConnection, env: Environment) -> None:
+    """Drop every schema of the test database and rebuild it from the migrations, with the fixture stage."""
+    cur = conn.cursor()
+    for schema in SCHEMAS:
+        cur.execute(f"DROP SCHEMA IF EXISTS {schema} CASCADE")
+    migrate(conn, env)
+    cur.execute(f"CREATE STAGE {FIXTURE_STAGE}")
+    # A stream's first read returns only the rows present when it was created
+    # (none here); later rows wait for the next read. Take that first read now.
+    run(conn, STAGES)
 
 
 def source_row(key: str, created: str, updated_at: str = "2026-09-08T01:33:26.619Z", **fields) -> dict:
