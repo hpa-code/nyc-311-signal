@@ -61,3 +61,5 @@ Both files come from the current Publication (ticket 07), so they always agree. 
 ## Refresh
 
 Run the export again, open the workbook, choose **Data → Refresh** for both sources, and save to Tableau Public again. Do this after the full backfill (ticket 08) and then whenever you want a newer snapshot.
+
+`scripts/tableau_wizard.sh` walks through the whole procedure stage by stage, from the export to recording the published URL in `.env`.
