@@ -272,20 +272,23 @@ locals {
 }
 
 resource "aws_cloudwatch_metric_alarm" "signal" {
-  for_each            = local.enabled ? local.alarms : {}
-  alarm_name          = "${local.name}-${each.key}"
-  alarm_description   = each.value.description
-  namespace           = local.namespace
-  metric_name         = each.value.metric
-  statistic           = each.value.comparison == "LessThanThreshold" ? "Minimum" : "Maximum"
+  for_each          = local.enabled ? local.alarms : {}
+  alarm_name        = "${local.name}-${each.key}"
+  alarm_description = each.value.description
+  namespace         = local.namespace
+  metric_name       = each.value.metric
+  statistic         = each.value.comparison == "LessThanThreshold" ? "Minimum" : "Maximum"
+  # The monitor publishes once an hour, at :15. Two of the last three hours
+  # must breach: a crossing has to persist, and for publication-stale (missing
+  # data breaching) the monitor must be silent for two hours, not just the
+  # current one before :15.
   period              = 3600
-  evaluation_periods  = 2
-  datapoints_to_alarm = 1
+  evaluation_periods  = 3
+  datapoints_to_alarm = 2
   threshold           = each.value.threshold
   comparison_operator = each.value.comparison
   treat_missing_data  = each.value.missing
   alarm_actions       = [var.alerts_topic_arn]
-  ok_actions          = [var.alerts_topic_arn]
 }
 
 resource "aws_cloudwatch_metric_alarm" "monitor_failed" {
