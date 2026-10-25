@@ -21,3 +21,4 @@ Index only. Each ticket's details and **Status** live in its own file under `iss
 | 15 | [Continuous deployment on merge](issues/15-continuous-deployment-on-merge.md) | 14 | #16 |
 | 16 | [Recovery drill and final docs](issues/16-recovery-drill-and-final-docs.md) | 12, 13, 15 | #17 |
 | 17 | [Tableau Public companion](issues/17-tableau-public-companion.md) | — (08 for the shared version) | — |
+| 18 | [Faster Seam 2 tests](issues/18-faster-seam-2-tests.md) | — | — |
