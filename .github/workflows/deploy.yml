@@ -1,0 +1,115 @@
+name: Deploy
+
+# On merge to main: build the dashboard image tagged with the commit SHA and
+# push it to ECR, apply pending Snowflake migrations to prod, roll the ECS
+# service onto the image, confirm the service runs it, and check the public
+# health endpoint. A deployment whose task never turns healthy is rolled back
+# by ECS (deployment circuit breaker), which this workflow reports as failed.
+#
+# Model promotion (python -m ml.promote) and backfills are never part of a
+# deployment. Migrations are additive (CODING_STANDARDS.md), so the running
+# dashboard keeps working while they apply, and they apply only once the
+# image exists and before it starts.
+#
+# Configuration, all on the GitHub environment "prod" (Settings >
+# Environments), whose deployment branches are limited to main:
+#   variables  AWS_DEPLOY_ROLE_ARN  output ci_deploy_role_arn of environments/prod
+#              DASHBOARD_URL        output dashboard_url of environments/prod
+#   secrets    SNOWFLAKE_ACCOUNT, SNOWFLAKE_USER, SNOWFLAKE_PRIVATE_KEY of the
+#              prod service user (NYC311_PROD_SVC), never visible to PR runs
+# Until AWS_DEPLOY_ROLE_ARN is set, the job is skipped.
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+  id-token: write # OIDC: short-lived AWS credentials, no stored keys
+
+concurrency:
+  group: deploy-prod
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: us-east-2
+  SERVICE: prod-nyc311-dashboard
+  CLUSTER: prod-nyc311-dashboard
+
+jobs:
+  deploy:
+    if: vars.AWS_DEPLOY_ROLE_ARN != ''
+    runs-on: ubuntu-latest
+    environment: prod
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - id: ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      # The task runs on ARM64 (Graviton); GitHub's hosted runners are x86.
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build and push the dashboard image
+        id: image
+        env:
+          IMAGE: ${{ steps.ecr.outputs.registry }}/prod-nyc311-dashboard:${{ github.sha }}
+        run: |
+          docker buildx build --platform linux/arm64 --provenance=false -f dashboard/Dockerfile -t "$IMAGE" --push .
+          echo "image=$IMAGE" >> "$GITHUB_OUTPUT"
+
+      - name: Apply Snowflake migrations (prod)
+        env:
+          NYC311_ENV: prod
+          SNOWFLAKE_ACCOUNT: ${{ secrets.SNOWFLAKE_ACCOUNT }}
+          SNOWFLAKE_USER: ${{ secrets.SNOWFLAKE_USER }}
+          SNOWFLAKE_PRIVATE_KEY: ${{ secrets.SNOWFLAKE_PRIVATE_KEY }}
+        run: |
+          umask 077
+          printf '%s\n' "$SNOWFLAKE_PRIVATE_KEY" > "$RUNNER_TEMP/snowflake_key.p8"
+          SNOWFLAKE_PRIVATE_KEY_PATH="$RUNNER_TEMP/snowflake_key.p8" uv run --locked python -m warehouse.migrate
+
+      - name: Render the task definition with the new image
+        run: |
+          aws ecs describe-task-definition --task-definition "$SERVICE" --query taskDefinition \
+            | jq 'del(.taskDefinitionArn, .revision, .status, .requiresAttributes, .compatibilities, .registeredAt, .registeredBy)' \
+            > task-definition.json
+
+      - id: render
+        uses: aws-actions/amazon-ecs-render-task-definition@v1
+        with:
+          task-definition: task-definition.json
+          container-name: dashboard
+          image: ${{ steps.image.outputs.image }}
+
+      - name: Deploy and wait until stable
+        id: deploy
+        uses: aws-actions/amazon-ecs-deploy-task-definition@v2
+        with:
+          task-definition: ${{ steps.render.outputs.task-definition }}
+          service: ${{ env.SERVICE }}
+          cluster: ${{ env.CLUSTER }}
+          wait-for-service-stability: true
+
+      # A rolled-back deployment also ends stable, on the previous revision.
+      - name: The service runs the new revision
+        run: |
+          running=$(aws ecs describe-services --cluster "$CLUSTER" --services "$SERVICE" \
+            --query "services[0].deployments[?status=='PRIMARY'].taskDefinition | [0]" --output text)
+          echo "running $running"
+          test "$running" = "${{ steps.deploy.outputs.task-definition-arn }}"
+
+      - name: Health check
+        run: |
+          for i in $(seq 1 20); do
+            curl -sf "${{ vars.DASHBOARD_URL }}/_stcore/health" && exit 0
+            sleep 15
+          done
+          echo "::error::${{ vars.DASHBOARD_URL }} is not healthy"; exit 1

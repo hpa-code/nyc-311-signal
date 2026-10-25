@@ -18,6 +18,7 @@ What each alert means and what to do. Alerts reach the `dev-nyc311-alerts` SNS t
 | `dev-nyc311-monitor-reconciliation-stale` | No Reconciliation Pass processed for 8 days (counted from when run metrics began, before the first) | Scheduler `dev-nyc311-collector-reconcile`, collector logs. An unfinished pass is resumed daily; one older than a week is not: rerun it by hand with its date, or remove its files from the stage so they stop holding up processing. |
 | `dev-nyc311-monitor-scoring-incomplete` | The latest Publication left eligible Requests unscored | `SELECT * FROM ML.APPROVED_MODEL` (none approved?). Missing scores are never filled in later. |
 | `dev-nyc311-monitor-failed` | The monitor Lambda failed | Its logs `/aws/lambda/dev-nyc311-monitor`; usually Snowflake credentials. |
+| `prod-nyc311-dashboard-unhealthy` | No healthy dashboard task behind the load balancer for 10 minutes | ECS service `prod-nyc311-dashboard` events and the logs `/ecs/prod-nyc311-dashboard`. A failed deploy rolls back by itself; to go back further, redeploy an earlier image tag (ECR keeps 5). |
 
 The unknown-Problem rate (`UnknownProblemRate`) is published without an alarm: a rising share of scored Requests whose Problem the model never saw is a reason to retrain (`python -m ml.train`).
 

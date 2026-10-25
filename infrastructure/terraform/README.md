@@ -90,3 +90,36 @@ uv run --env-file .env python -m ingestion.backfill --through 2026-10 --store s3
 ```
 
 Logs are in CloudWatch under `/ecs/dev-nyc311-backfill`. Once the run's manifest exists, load and reconcile it with `python -m warehouse.backfill load|report --through 2026-10`.
+
+## Production and the public dashboard
+
+`environments/prod` mirrors dev with `prod-` resources and the `NYC311` Snowflake database, plus the public dashboard (`modules/dashboard`) and the CI deployment role (`modules/ci_deploy`). Nothing in it is applied yet. Order, all deliberate steps:
+
+1. **Snowflake.** Run `snowflake/setup_prod.sql` as ACCOUNTADMIN. Then apply the migrations: `NYC311_ENV=prod uv run --env-file .env python -m warehouse.migrate`. Copy `STORAGE_AWS_IAM_USER_ARN` and `STORAGE_AWS_EXTERNAL_ID` from `DESC INTEGRATION NYC311_PROD_S3`, and `notification_channel` from `SHOW PIPES IN DATABASE NYC311`, into `environments/prod/terraform.tfvars` with `initial_cursor`, `backfill_through`, `collector_image_tag` and `alert_email`.
+2. **AWS, without the dashboard.** `terraform plan` then `apply` in `environments/prod`. Then put the secret values (as in dev, under `prod/nyc311/…`), push the collector image, and run the backfill and the monitor as described above. Disable dev's daily schedule once prod's runs (instruction.md §13).
+3. **Dashboard user.** Generate a key pair for `NYC311_DASHBOARD` and set its public key (`setup_prod.sql`). Put `{"account","user","private_key"}` in `prod/nyc311/snowflake-dashboard-user`. This user holds only the dashboard role, so the deployed app cannot write or read past the APP views.
+4. **Dashboard.** This step costs money: about $37 per month for the load balancer, one 0.25 vCPU / 0.5 GB task and a public IPv4 (instruction.md §16).
+   - Build and push the image to `dashboard_repository_url` (as for the monitor, with `-f dashboard/Dockerfile`).
+   - Set `dashboard_image_tag`, and `domain_name` if you have one, then apply.
+   - With a domain:
+     - add the `dashboard_certificate_validation_records` CNAMEs at its DNS host (the apply waits for them);
+     - point the name at `dashboard_load_balancer_dns_name`.
+   - Without a domain: the dashboard is served over plain HTTP at the load balancer's own name.
+   - The service only accepts traffic from the load balancer. Its health check is `/_stcore/health`, and the `prod-nyc311-dashboard-unhealthy` alarm watches it.
+   - The load balancer sits in two subnets, the minimum, because each subnet adds a billed public IPv4 address. Expect about $41 a month rather than §16's $37.
+5. **Continuous deployment.** In the GitHub repository:
+   - Create the environment `prod`, with deployment branches limited to `main`.
+   - On it, set the variables `AWS_DEPLOY_ROLE_ARN` (output `ci_deploy_role_arn`) and `DASHBOARD_URL` (output `dashboard_url`).
+   - On it, add the secrets `SNOWFLAKE_ACCOUNT`, `SNOWFLAKE_USER` (`NYC311_PROD_SVC`) and `SNOWFLAKE_PRIVATE_KEY`, the prod service user's key.
+   - The repository-level secrets of the same names hold the dev service user's key. CI pull-request runs use those to run the warehouse tests against `NYC311_DEV_TEST`, so a pull request never sees a prod key.
+
+   From then on, each merge to main runs `.github/workflows/deploy.yml`:
+   - It applies pending migrations to prod.
+   - It builds and pushes the image tagged with the commit SHA.
+   - It rolls the service onto the image and checks health.
+   - It assumes the deploy role through OIDC, with no stored AWS keys. The role trusts only `deploy.yml` as it is on `main`, in the `prod` environment. It can only push the dashboard image and update the dashboard service.
+   - Its last checks confirm the service runs the new revision (an ECS rollback also ends "stable") and that the public health endpoint answers.
+   - It never promotes models or runs backfills.
+   - After the first apply, Terraform ignores the service's task definition, so CI owns image updates.
+
+To stop paying for the dashboard, set `dashboard_image_tag = null` and apply. This removes the load balancer, service and cluster, and keeps the image repository and the secret.

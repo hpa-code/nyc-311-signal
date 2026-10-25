@@ -22,3 +22,7 @@ All of these land in the same change:
 - the table in `empty_db`'s truncate list (`warehouse/tests/conftest.py`), and the view in `test_dashboard_role_reads_app_views_and_nothing_else`.
 
 State that outlives a Publication (`ANALYTICS.DAILY_BACKLOG`, `ML.TRAINING_LABELS`) is never pruned. Its rows from a held attempt are deleted before commit.
+
+## Migrations
+
+**Additive only.** A deploy applies pending migrations while the previous dashboard image still serves (`.github/workflows/deploy.yml`), and a Publication may be running. A migration may add tables, columns and views, or replace a view or procedure compatibly. It never drops or renames anything the deployed code still reads. To retire something, stop reading it in one release, then drop it in a later migration.

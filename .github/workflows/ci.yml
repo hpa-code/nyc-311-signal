@@ -21,15 +21,61 @@ jobs:
       - name: Run tests
         run: uv run pytest
 
+  # Seam 2: the SQL rules against fixtures, in NYC311_DEV_TEST. Needs the
+  # repository secrets SNOWFLAKE_ACCOUNT, SNOWFLAKE_USER and
+  # SNOWFLAKE_PRIVATE_KEY (the pipeline service user's key); skipped without
+  # them. One run at a time: every run rebuilds the shared test database.
+  warehouse-tests:
+    runs-on: ubuntu-latest
+    concurrency: nyc311-dev-test-database
+    env:
+      SNOWFLAKE_ACCOUNT: ${{ secrets.SNOWFLAKE_ACCOUNT }}
+      SNOWFLAKE_USER: ${{ secrets.SNOWFLAKE_USER }}
+    steps:
+      - uses: actions/checkout@v4
+        if: env.SNOWFLAKE_ACCOUNT != ''
+      - uses: astral-sh/setup-uv@v6
+        if: env.SNOWFLAKE_ACCOUNT != ''
+      - name: Run the warehouse tests
+        if: env.SNOWFLAKE_ACCOUNT != ''
+        env:
+          SNOWFLAKE_PRIVATE_KEY: ${{ secrets.SNOWFLAKE_PRIVATE_KEY }}
+        run: |
+          umask 077
+          printf '%s\n' "$SNOWFLAKE_PRIVATE_KEY" > "$RUNNER_TEMP/snowflake_key.p8"
+          SNOWFLAKE_PRIVATE_KEY_PATH="$RUNNER_TEMP/snowflake_key.p8" uv run --locked pytest warehouse/tests
+      - name: No Snowflake credentials
+        if: env.SNOWFLAKE_ACCOUNT == ''
+        run: echo "::notice::Warehouse tests skipped (no SNOWFLAKE_* secrets)."
+
+  docker-build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        image: [ingestion, monitoring, dashboard]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build ${{ matrix.image }}
+        run: docker build -f ${{ matrix.image }}/Dockerfile -t nyc311-${{ matrix.image }}:ci .
+      - name: Dashboard answers its health check
+        if: matrix.image == 'dashboard'
+        run: |
+          docker run -d --name dashboard -p 8501:8501 nyc311-dashboard:ci
+          for i in $(seq 1 30); do curl -sf http://localhost:8501/_stcore/health && exit 0; sleep 2; done
+          docker logs dashboard; exit 1
+
   terraform:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        environment: [dev, prod]
     steps:
       - uses: actions/checkout@v4
       - uses: hashicorp/setup-terraform@v3
       - name: Format
         run: terraform fmt -recursive -check infrastructure/terraform
-      - name: Validate dev
-        working-directory: infrastructure/terraform/environments/dev
+      - name: Validate ${{ matrix.environment }}
+        working-directory: infrastructure/terraform/environments/${{ matrix.environment }}
         run: |
           terraform init -backend=false -input=false
           terraform validate
