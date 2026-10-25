@@ -10,7 +10,8 @@
 --      up without waiting for new data.
 --   3. In one transaction, holding the pipeline lock so no merge can run
 --      meanwhile: build every output under a new publication_id (including
---      the day's backlog snapshot, ANALYTICS.DAILY_BACKLOG), run the checks,
+--      the day's backlog snapshot, ANALYTICS.DAILY_BACKLOG, and changed label
+--      versions, ML.TRAINING_LABELS; both are dropped if held), run the checks,
 --      and move the current-Publication pointer only if all pass. A failed
 --      check records the attempt as held and keeps the pointer.
 --   4. Fail (after committing) when held, so the task's failure is the alert.
@@ -52,7 +53,7 @@ BEGIN
   END IF;
 
   -- Inputs include every migration's checksum (this procedure's and the views
-  -- it reads, such as ML.TRAINING_LABELS), so a change to the outputs rebuilds
+  -- it reads, such as ML.CURRENT_LABELS), so a change to the outputs rebuilds
   -- them without waiting for new data.
   SELECT HASH(r.n, r.loaded, c.n, c.merged, v.n, q.n, m.n, p.checksums) INTO :input_hash
   FROM (SELECT COUNT(*) AS n, MAX(loaded_at) AS loaded FROM RAW.RAW_311_OBSERVATIONS) AS r,
@@ -248,14 +249,37 @@ BEGIN
   FROM ANALYTICS.REQUEST_FACTS
   WHERE overdue;
 
+  -- Today's Labels, computed once. A label version is recorded for every
+  -- Request whose Label, reason or allowance differs from its latest version
+  -- (removed again below if this attempt is held).
+  DELETE FROM ML.WORK_CURRENT_LABELS;
+  INSERT INTO ML.WORK_CURRENT_LABELS SELECT * FROM ML.CURRENT_LABELS;
+
+  INSERT INTO ML.TRAINING_LABELS
+  WITH latest AS (
+    SELECT unique_key, label, no_label_reason, reporting_allowance_hours
+    FROM ML.TRAINING_LABELS
+    QUALIFY ROW_NUMBER() OVER (PARTITION BY unique_key ORDER BY observed_through DESC, recorded_at DESC) = 1
+  )
+  SELECT
+    c.unique_key, c.label, c.no_label_reason, c.created_at_utc, c.horizon_at_utc, c.matured_at_utc,
+    c.observed_through, c.reporting_allowance_hours, c.date_only_closure, c.duplicate_closure,
+    c.source_payload_hash, c.source_extracted_at, :pid, CURRENT_TIMESTAMP()
+  FROM ML.WORK_CURRENT_LABELS AS c
+  LEFT JOIN latest AS l ON l.unique_key = c.unique_key
+  WHERE l.unique_key IS NULL
+     OR l.label IS DISTINCT FROM c.label
+     OR l.no_label_reason IS DISTINCT FROM c.no_label_reason
+     OR l.reporting_allowance_hours <> c.reporting_allowance_hours;
+
   -- Every Current Request once: NYPD outside the Modeling Cohort, the rest
   -- with their Label or the reason for none.
   INSERT INTO ANALYTICS.PUB_LABEL_SUMMARY
-  SELECT :pid, agency, label, no_label_reason, COUNT(*), COUNT_IF(duplicate_closure), COUNT_IF(date_only_closure)
+  SELECT :pid, agency, label, no_label_reason, COUNT(*), COUNT_IF(duplicate_closure)
   FROM (
-    SELECT agency, label, no_label_reason, duplicate_closure, date_only_closure FROM ML.TRAINING_LABELS
+    SELECT agency, label, no_label_reason, duplicate_closure FROM ML.WORK_CURRENT_LABELS
     UNION ALL
-    SELECT COALESCE(agency, 'Unspecified'), NULL, 'outside_modeling_cohort', FALSE, FALSE
+    SELECT COALESCE(agency, 'Unspecified'), NULL, 'outside_modeling_cohort', FALSE
     FROM CLEAN.SERVICE_REQUESTS
     WHERE unique_key NOT IN (SELECT unique_key FROM ML.MODELING_COHORT)
   )
@@ -283,8 +307,9 @@ BEGIN
     'geo_cells_have_at_least_20_requests', g.small_cells = 0,
     'overdue_requests_are_open', q.n <= o.open_requests,
     'labels_count_every_request', ls.requests = o.requests,
-    'labels_have_a_value_or_a_reason', ls.ambiguous = 0,
-    'modeling_cohort_excludes_nypd', ls.nypd_in_cohort = 0
+    'labels_have_a_value_or_a_reason', ls.label_and_reason_both_or_neither = 0,
+    'modeling_cohort_excludes_nypd', ls.nypd_in_cohort = 0,
+    'labels_find_their_request_version', lv.missing = 0
   ) INTO :checks
   FROM (
     SELECT
@@ -315,10 +340,11 @@ BEGIN
   (
     SELECT
       COALESCE(SUM(requests), 0) AS requests,
-      COUNT_IF((label IS NULL) = (no_label_reason IS NULL)) AS ambiguous,
+      COUNT_IF((label IS NULL) = (no_label_reason IS NULL)) AS label_and_reason_both_or_neither,
       COUNT_IF(agency = 'NYPD' AND no_label_reason IS DISTINCT FROM 'outside_modeling_cohort') AS nypd_in_cohort
     FROM ANALYTICS.PUB_LABEL_SUMMARY WHERE publication_id = :pid
   ) AS ls,
+  (SELECT COUNT_IF(NOT version_found) AS missing FROM ML.WORK_CURRENT_LABELS) AS lv,
   (SELECT COUNT(*) AS n, COUNT(DISTINCT unique_key) AS distinct_keys FROM CLEAN.SERVICE_REQUESTS) AS cr;
   SELECT BOOLAND_AGG(value::BOOLEAN) INTO :passed FROM TABLE(FLATTEN(input => :checks));
 
@@ -331,6 +357,7 @@ BEGIN
     DELETE FROM ANALYTICS.DAILY_BACKLOG WHERE snapshot_date = :snapshot_date AND publication_id <> :pid;
   ELSE
     DELETE FROM ANALYTICS.DAILY_BACKLOG WHERE publication_id = :pid;
+    DELETE FROM ML.TRAINING_LABELS WHERE publication_id = :pid;
   END IF;
   UPDATE OPS.PUBLICATIONS
   SET state = IFF(:passed, 'published', 'held'), finished_at = CURRENT_TIMESTAMP(), checks = :checks

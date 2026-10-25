@@ -34,6 +34,19 @@ System fields `:created_at` and `:updated_at` are available (see below).
 - A batch includes Requests created up to roughly 03:00 New York time on the same calendar day. Example: the 2026-10-22 01:33 UTC batch contained Requests created up to 2026-10-21 02:49 local.
 - Creation-to-publication lag is therefore roughly **19–43 hours**. With collection at 06:00 UTC, creation-to-First-Observed is about **23–47 hours** when no runs fail.
 
+## Publication lag, re-measured from `:created_at` (2026-10-24)
+
+The lag is measured as the time from `created_date` (New York time) to `:created_at`, for 3.1M Requests created from 2026-01-15 to 2026-10-23. Earlier rows carry the 2025-12-26 reload date.
+
+| Created | p95 | p99 | Over 48 h | Over 72 h |
+|---|---|---|---|---|
+| Jan–May 2026 | 42 h | 45–78 h | 0.7–2.2% | 0.3–1.3% |
+| Jun–Oct 2026 | 45–54 h | 67–73 h | 4.3–8.1% | 0.7–1.1% |
+
+The reporting allowance for Labels is therefore 72 h, not the starting 48 h.
+
+The lag for Closures could not be measured directly: `:updated_at` moves with every later edit, so it gives only an upper bound. Creation lag stands in for it.
+
 ## Change tracking
 
 - `:updated_at` changes when a row changes. Example: a Request created 2026-07-31 and closed 2026-10-19 kept `:created_at` 2026-08-02 but has `:updated_at` 2026-10-22 01:33 UTC.

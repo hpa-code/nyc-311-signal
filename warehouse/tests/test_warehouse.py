@@ -93,6 +93,7 @@ def test_dashboard_role_reads_app_views_and_nothing_else(test_env):
             "SELECT COUNT(*) FROM ANALYTICS.PUB_OVERDUE_QUEUE",
             "SELECT COUNT(*) FROM ANALYTICS.REQUEST_FACTS",
             "SELECT COUNT(*) FROM ML.TRAINING_LABELS",
+            "SELECT COUNT(*) FROM ML.CURRENT_LABELS",
             "CREATE TABLE APP.SNEAKY (x INT)",
             "CREATE OR REPLACE VIEW APP.OVERVIEW_DAILY AS SELECT 1 AS x",
         ):

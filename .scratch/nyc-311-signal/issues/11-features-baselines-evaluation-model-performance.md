@@ -21,4 +21,4 @@
 
 **2026-10-24 (agent, from 10):**
 - **Duplicate share.** Report it in the model card both overall and within each Label, from `APP.PUBLISHED_LABEL_SUMMARY.duplicate_closures` (ADR 0003). In dev, 7.2% of labeled Requests are Duplicate Closures: 258,078 of the 0s and 8,757 of the 1s.
-- **Matured labels.** Filter `ML.TRAINING_LABELS` on `matured_at_utc <= cutoff` to get the labels known at a training date. Snapshot the labels you train on, because the view follows the latest data.
+- **Matured labels.** `ML.TRAINING_LABELS` holds label versions (see ticket 10's review fixes). The Labels known at a cutoff T are, per Request, the latest version with `observed_through <= T` that has a Label. Record T with the model.
