@@ -14,7 +14,9 @@ One evaluation, in one transaction:
      gradient boosting only if its PR-AUC is at least MATERIAL_GAIN higher.
   4. Score the test period once: the baselines and the chosen model, overall
      (with a bootstrap interval for PR-AUC) and by agency, Problem and borough.
-  5. Record everything in ML.MODEL_EVALUATIONS and ML.MODEL_METRICS.
+  5. Record everything in ML.MODEL_EVALUATIONS and ML.MODEL_METRICS: this
+     registers the version, with reference scores that promotion
+     (ml.promote) checks the warehouse reproduces.
 """
 
 import json
@@ -48,6 +50,7 @@ FIRST_CREATED = datetime(2025, 1, 1, 5)
 WINDOW = timedelta(weeks=8)
 LOGISTIC_C = 1.0
 BOOSTING_PARAMS = {"max_iter": 200, "learning_rate": 0.1, "random_state": 0}
+REFERENCE_REQUESTS = 20
 
 Scorer = Callable[[pd.DataFrame], np.ndarray]
 
@@ -151,6 +154,7 @@ def measure(examples: pd.DataFrame, plan: SplitPlan, label_cutoff: datetime) -> 
         "threshold": thresholds[chosen],
         "logistic_regression": {"C": LOGISTIC_C, **weights} if chosen == "logistic_regression" else None,
         "gradient_boosting": BOOSTING_PARAMS if chosen == "gradient_boosting" else None,
+        "reference_scores": _reference_scores(test, scorers[chosen]),
         "dependencies": {
             "python": platform.python_version(),
             "scikit-learn": sklearn.__version__,
@@ -165,6 +169,17 @@ def measure(examples: pd.DataFrame, plan: SplitPlan, label_cutoff: datetime) -> 
         "gain": gain,
     }
     return Result(_split_summary(by_split, plan, label_cutoff, categories), selection, model, metrics)
+
+
+def _reference_scores(test: pd.DataFrame, scorer: Scorer) -> list[dict]:
+    """Features and scores of REFERENCE_REQUESTS test examples, which promotion
+    checks the warehouse reproduces (ml.promote)."""
+    sample = test.sort_values("unique_key").head(REFERENCE_REQUESTS)
+    scores = scorer(sample)
+    return [
+        {**{f: (str(v) if isinstance(v, str) else int(v)) for f, v in row.items()}, "score": float(score)}
+        for row, score in zip(sample[list(FEATURES)].to_dict("records"), scores)
+    ]
 
 
 def _rate_baseline(train: pd.DataFrame, categories: CategoryMap, feature: str, prevalence: float) -> Scorer:

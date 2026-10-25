@@ -9,6 +9,7 @@ from datetime import date, datetime, timedelta, timezone
 import pytest
 
 from ml.examples import SplitPlan, snapshot_examples
+from ml.promote import approved_model, promote
 from ml.train import evaluate
 from warehouse.pipeline import run
 from warehouse.tests.fixtures import STAGES, source_row, stage_collector_run
@@ -144,3 +145,7 @@ def test_an_evaluation_reports_every_baseline_and_the_model_on_the_test_period_o
     for kind in ("agency", "problem", "borough"):
         sliced = [m for m in metrics if m["split"] == "test" and m["scorer"] == "agency_only" and m["slice_kind"] == kind]
         assert sum(m["requests"] for m in sliced) == 43
+
+    # The warehouse reproduces the trained model's scores, so it can be promoted.
+    promote(empty_db, version)
+    assert approved_model(empty_db) == version

@@ -16,7 +16,9 @@ page = st.navigation(
     [
         st.Page("pages/overview.py", title="Overview", default=True),
         st.Page("pages/geographic.py", title="Geographic patterns"),
+        st.Page("pages/risk.py", title="Risk Queue"),
         st.Page("pages/overdue.py", title="Overdue Queue"),
+        st.Page("pages/lookup.py", title="Request lookup"),
         st.Page("pages/model.py", title="Model Performance"),
     ]
 )

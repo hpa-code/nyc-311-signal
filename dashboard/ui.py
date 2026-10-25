@@ -69,6 +69,15 @@ def percent(numerator, denominator) -> str:
     return "–" if not denominator else f"{numerator / denominator:.0%}"
 
 
+def probability(p) -> str:
+    """An Admission Score as a percentage, never rounded to a certain 0% or 100%."""
+    if p < 0.001:
+        return "<0.1%"
+    if p > 0.999:
+        return ">99.9%"
+    return f"{p:.1%}"
+
+
 def horizontal_bars(data: pd.DataFrame, title: str) -> alt.Chart:
     """One-series horizontal bars with the palette's mark spec; encode on the result."""
     colors = palette()

@@ -10,8 +10,10 @@
 --      up without waiting for new data.
 --   3. In one transaction, holding the pipeline lock so no merge can run
 --      meanwhile: build every output under a new publication_id (including
---      the day's backlog snapshot, ANALYTICS.DAILY_BACKLOG, and changed label
---      versions, ML.TRAINING_LABELS; both are dropped if held), run the checks,
+--      the day's backlog snapshot, ANALYTICS.DAILY_BACKLOG, changed label
+--      versions, ML.TRAINING_LABELS, and new feature snapshots and Admission
+--      Scores, ML.FEATURE_SNAPSHOTS and ML.REQUEST_PREDICTIONS; all are
+--      dropped if held), run the checks,
 --      and move the current-Publication pointer only if all pass. A failed
 --      check records the attempt as held and keeps the pointer.
 --   4. Fail (after committing) when held, so the task's failure is the alert.
@@ -31,6 +33,7 @@ DECLARE
   latest_state STRING;
   checks VARIANT;
   snapshot_date DATE;
+  observed_through TIMESTAMP_NTZ;
   passed BOOLEAN;
   err STRING;
   held EXCEPTION (-20002, 'Publication held: a check failed. See OPS.PUBLICATIONS.checks; the dashboard keeps the previous Publication.');
@@ -54,14 +57,16 @@ BEGIN
 
   -- Inputs include every migration's checksum (this procedure's and the views
   -- it reads, such as ML.CURRENT_LABELS), so a change to the outputs rebuilds
-  -- them without waiting for new data.
-  SELECT HASH(r.n, r.loaded, c.n, c.merged, v.n, q.n, m.n, p.checksums) INTO :input_hash
+  -- them without waiting for new data; and the model promotions, so a newly
+  -- approved model scores at the next call.
+  SELECT HASH(r.n, r.loaded, c.n, c.merged, v.n, q.n, m.n, p.checksums, promotions.n) INTO :input_hash
   FROM (SELECT COUNT(*) AS n, MAX(loaded_at) AS loaded FROM RAW.RAW_311_OBSERVATIONS) AS r,
        (SELECT HASH_AGG(version, checksum) AS checksums FROM OPS.SCHEMA_MIGRATIONS) AS p,
        (SELECT COUNT(*) AS n, MAX(merged_at) AS merged FROM CLEAN.SERVICE_REQUESTS) AS c,
        (SELECT COUNT(*) AS n FROM CLEAN.REQUEST_VERSIONS) AS v,
        (SELECT COUNT(*) AS n FROM CLEAN.QUARANTINED_RECORDS) AS q,
-       (SELECT COUNT(*) AS n FROM OPS.RUN_MANIFESTS) AS m;
+       (SELECT COUNT(*) AS n FROM OPS.RUN_MANIFESTS) AS m,
+       (SELECT COUNT(*) AS n FROM ML.MODEL_PROMOTIONS) AS promotions;
   SELECT MAX_BY(input_hash, started_at), MAX_BY(state, started_at) INTO :latest_hash, :latest_state
   FROM OPS.PUBLICATIONS;
   IF (latest_hash = input_hash AND latest_state = 'published') THEN
@@ -285,6 +290,48 @@ BEGIN
   )
   GROUP BY 2, 3, 4;
 
+  -- Admission Scores. Each Modeling Cohort Request's features are frozen once,
+  -- by the first Publication that sees it, with the decision whether it is
+  -- eligible: First Observed within 72 h of creation and still below the
+  -- horizon. The same Publication scores the eligible ones with the approved
+  -- model (for that feature version). Without one they stay unscored: no
+  -- later Publication fills a score in. The Risk Queue lists the eligible
+  -- ones still open and below the horizon, with the stored score or none.
+  SELECT MAX(observed_through) INTO :observed_through FROM CLEAN.CLOSURE_FACTS;
+  INSERT INTO ML.FEATURE_SNAPSHOTS
+  SELECT
+    f.unique_key, 'features-v1', f.created_at_utc, c.created_date_local, c.horizon_at_utc, c.first_observed_at,
+    c.observed_through, c.payload_hash, f.problem, f.agency, f.borough, f.channel,
+    f.created_hour, f.created_weekday, f.created_month, :pid, CURRENT_TIMESTAMP(),
+    CONVERT_TIMEZONE('UTC', c.first_observed_at)::TIMESTAMP_NTZ <= DATEADD(hour, 72, c.created_at_utc)
+      AND c.observed_through < c.horizon_at_utc
+  FROM ML.FEATURES AS f
+  JOIN CLEAN.CLOSURE_FACTS AS c ON c.unique_key = f.unique_key
+  WHERE f.unique_key NOT IN (SELECT unique_key FROM ML.FEATURE_SNAPSHOTS)
+  -- Both sides read Current Requests: one row per Request even if a check is
+  -- about to find a duplicate, so only that check fails.
+  QUALIFY ROW_NUMBER() OVER (PARTITION BY f.unique_key ORDER BY c.payload_hash) = 1;
+
+  INSERT INTO ML.REQUEST_PREDICTIONS
+  SELECT
+    s.unique_key, m.model_version, s.feature_version, s.snapshot_observed_through, CURRENT_TIMESTAMP(),
+    ML.DELAYED_PROBABILITY(
+      m.model, s.problem, s.agency, s.borough, s.channel, s.created_hour, s.created_weekday, s.created_month
+    ),
+    :pid
+  FROM ML.FEATURE_SNAPSHOTS AS s
+  JOIN ML.APPROVED_MODEL AS m ON m.feature_version = s.feature_version
+  WHERE s.publication_id = :pid AND s.eligible
+    AND s.unique_key NOT IN (SELECT unique_key FROM ML.REQUEST_PREDICTIONS);
+
+  INSERT INTO ANALYTICS.PUB_RISK_QUEUE
+  SELECT :pid, s.unique_key, s.problem, s.agency, s.borough, s.created_date_local, p.admission_score
+  FROM ML.FEATURE_SNAPSHOTS AS s
+  LEFT JOIN ML.REQUEST_PREDICTIONS AS p ON p.unique_key = s.unique_key
+  WHERE s.eligible
+    AND s.unique_key IN (SELECT unique_key FROM ML.MODELING_COHORT WHERE status IS DISTINCT FROM 'Closed')
+    AND :observed_through < s.horizon_at_utc;
+
   -- First stream read in this transaction: if Snowpipe loaded files mid-build,
   -- the coverage counts may include part of a run, so drop them and wait.
   SELECT COUNT(*) INTO :pending_rows FROM (SELECT 1 FROM RAW.NEW_OBSERVATIONS LIMIT 1);
@@ -309,7 +356,13 @@ BEGIN
     'labels_count_every_request', ls.requests = o.requests,
     'labels_have_a_value_or_a_reason', ls.label_and_reason_both_or_neither = 0,
     'modeling_cohort_excludes_nypd', ls.nypd_in_cohort = 0,
-    'labels_find_their_request_version', lv.missing = 0
+    'labels_find_their_request_version', lv.missing = 0,
+    'one_feature_snapshot_per_request', fs.n = fs.distinct_keys,
+    'one_admission_score_per_request', ap.n = ap.distinct_keys,
+    'admission_scores_are_probabilities', ap.outside_0_1 = 0,
+    'risk_queue_requests_are_open', rq.n <= o.open_requests,
+    'risk_queue_excludes_nypd', rq.nypd = 0,
+    'risk_queue_shows_every_stored_score', rq.scored = rq.stored_scores
   ) INTO :checks
   FROM (
     SELECT
@@ -345,6 +398,21 @@ BEGIN
     FROM ANALYTICS.PUB_LABEL_SUMMARY WHERE publication_id = :pid
   ) AS ls,
   (SELECT COUNT_IF(NOT version_found) AS missing FROM ML.WORK_CURRENT_LABELS) AS lv,
+  (SELECT COUNT(*) AS n, COUNT(DISTINCT unique_key) AS distinct_keys FROM ML.FEATURE_SNAPSHOTS) AS fs,
+  (
+    SELECT COUNT(*) AS n, COUNT(DISTINCT unique_key) AS distinct_keys,
+      COUNT_IF(publication_id = :pid AND NOT admission_score BETWEEN 0 AND 1) AS outside_0_1
+    FROM ML.REQUEST_PREDICTIONS
+  ) AS ap,
+  (
+    SELECT
+      COUNT(*) AS n,
+      COUNT_IF(agency = 'NYPD') AS nypd,
+      COUNT(admission_score) AS scored,
+      (SELECT COUNT(*) FROM ML.REQUEST_PREDICTIONS WHERE unique_key IN (
+        SELECT unique_key FROM ANALYTICS.PUB_RISK_QUEUE WHERE publication_id = :pid)) AS stored_scores
+    FROM ANALYTICS.PUB_RISK_QUEUE WHERE publication_id = :pid
+  ) AS rq,
   (SELECT COUNT(*) AS n, COUNT(DISTINCT unique_key) AS distinct_keys FROM CLEAN.SERVICE_REQUESTS) AS cr;
   SELECT BOOLAND_AGG(value::BOOLEAN) INTO :passed FROM TABLE(FLATTEN(input => :checks));
 
@@ -358,6 +426,8 @@ BEGIN
   ELSE
     DELETE FROM ANALYTICS.DAILY_BACKLOG WHERE publication_id = :pid;
     DELETE FROM ML.TRAINING_LABELS WHERE publication_id = :pid;
+    DELETE FROM ML.FEATURE_SNAPSHOTS WHERE publication_id = :pid;
+    DELETE FROM ML.REQUEST_PREDICTIONS WHERE publication_id = :pid;
   END IF;
   UPDATE OPS.PUBLICATIONS
   SET state = IFF(:passed, 'published', 'held'), finished_at = CURRENT_TIMESTAMP(), checks = :checks
@@ -374,6 +444,7 @@ BEGIN
   DELETE FROM ANALYTICS.PUB_GEO_CELLS WHERE publication_id NOT IN (SELECT publication_id FROM OPS.PUBLICATION_KEEP);
   DELETE FROM ANALYTICS.PUB_OVERDUE_QUEUE WHERE publication_id NOT IN (SELECT publication_id FROM OPS.PUBLICATION_KEEP);
   DELETE FROM ANALYTICS.PUB_LABEL_SUMMARY WHERE publication_id NOT IN (SELECT publication_id FROM OPS.PUBLICATION_KEEP);
+  DELETE FROM ANALYTICS.PUB_RISK_QUEUE WHERE publication_id NOT IN (SELECT publication_id FROM OPS.PUBLICATION_KEEP);
   COMMIT;
 
   IF (NOT passed) THEN

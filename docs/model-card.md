@@ -64,6 +64,16 @@ What the numbers say:
   - TLC and EDC are almost all Delayed, so their numbers mean little.
 - The page flags slices with under 100 Requests.
 
+## Approved model (dev, `model-20261025T035838`)
+
+This version was retrained on the same examples and label cutoff, so that it records the reference scores promotion checks (ticket 12). It was promoted on 2026-10-25 and is the model that computes Admission Scores.
+
+- **Test results:** PR-AUC 0.710 (0.708–0.713), top-10% precision / recall 0.739 / 0.175, lift 1.75, Brier 0.1777.
+- **Validation:** gradient boosting was 0.002 lower again.
+- **Why the numbers moved slightly:** the examples were read in no fixed order. Since then they are read in `unique_key` order, so retraining is reproducible.
+- **Scoring:** `ML.DELAYED_PROBABILITY` reproduces its 20 reference scores to within 1e-9.
+- **First Publication with scores:** 14,283 eligible Requests were scored, and 11,441 open ones were in the Risk Queue. Each Request is scored once, by the first Publication that sees it, and never again.
+
 ## Limitations
 
 - **Retrospective, so approximate.**

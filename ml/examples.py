@@ -104,11 +104,12 @@ def snapshot_examples(conn: SnowflakeConnection, model_version: str, plan: Split
 
 
 def load_examples(conn: SnowflakeConnection, model_version: str) -> pd.DataFrame:
-    """A model version's examples, one row per Request."""
+    """A model version's examples, one row per Request, in unique_key order so
+    that fitting them again gives the same model."""
     cur = conn.cursor()
     cur.execute(
         f"SELECT split, unique_key, created_at_utc, label, duplicate_closure, {', '.join(FEATURES)}"
-        " FROM ML.MODEL_EXAMPLES WHERE model_version = %s",
+        " FROM ML.MODEL_EXAMPLES WHERE model_version = %s ORDER BY unique_key",
         (model_version,),
     )
     frame = cur.fetch_pandas_all()

@@ -186,3 +186,51 @@ def label_summary(publication_id: str) -> pd.DataFrame:
         " FROM APP.PUBLISHED_LABEL_SUMMARY WHERE publication_id = %s",
         (publication_id,),
     )
+
+
+@st.cache_data(max_entries=8)
+def risk_queue_groups(publication_id: str) -> pd.DataFrame:
+    return _frame(
+        "SELECT agency, problem, borough, COUNT(*) AS requests, COUNT(admission_score) AS scored"
+        " FROM APP.PUBLISHED_RISK_QUEUE WHERE publication_id = %s GROUP BY ALL",
+        (publication_id,),
+    )
+
+
+@st.cache_data(max_entries=32)
+def risk_queue_count(publication_id: str, f: GroupFilter) -> int:
+    row = _frame(
+        "SELECT COUNT(*) AS n FROM APP.PUBLISHED_RISK_QUEUE WHERE publication_id = %s" + _GROUP_FILTER,
+        (publication_id, *_group_params(f)),
+    )
+    return int(row["n"].iloc[0])
+
+
+@st.cache_data(max_entries=64)
+def risk_queue_page(publication_id: str, f: GroupFilter, page: int, page_size: int) -> pd.DataFrame:
+    """One page of the Risk Queue, highest Admission Score first; Requests without one last."""
+    return _frame(
+        "SELECT unique_key, problem, agency, borough, created_date, admission_score"
+        " FROM APP.PUBLISHED_RISK_QUEUE WHERE publication_id = %s" + _GROUP_FILTER
+        + " ORDER BY admission_score DESC NULLS LAST, unique_key LIMIT %s OFFSET %s",
+        (publication_id, *_group_params(f), page_size, page * page_size),
+    )
+
+
+# The Request lookup reads Request Versions up to the Publication's data time,
+# so it shows what that Publication saw.
+@st.cache_data(max_entries=64)
+def request_versions(unique_key: str, data_as_of) -> pd.DataFrame:
+    """The Request's versions seen by `data_as_of`, latest first."""
+    return _frame(
+        "SELECT * FROM APP.REQUEST_LOOKUP WHERE unique_key = %s AND valid_from_extracted_at <= %s"
+        " ORDER BY valid_from_extracted_at DESC",
+        (unique_key, data_as_of),
+    )
+
+
+@st.cache_data(max_entries=64)
+def admission_score(unique_key: str, publication_id: str) -> pd.DataFrame:
+    """The Request's Admission Score with provenance (no rows if it has none);
+    `publication_id` only keys the cache."""
+    return _frame("SELECT * FROM APP.ADMISSION_SCORES WHERE unique_key = %s", (unique_key,))
