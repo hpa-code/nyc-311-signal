@@ -49,6 +49,8 @@ Streamlit dashboard (read-only role, APP views)     Monitor Lambda ─► CloudW
 | ![Risk Queue](docs/screenshots/risk-queue.jpg) | ![Model Performance](docs/screenshots/model-performance.jpg) |
 | ![Pipeline Health](docs/screenshots/pipeline-health.jpg) | |
 
+**Tableau Public companion:** [NYC 311 Signal: Requests and Closure](https://public.tableau.com/app/profile/hari.acharya3471/viz/NYC311Signal/NYC311SignalRequestsandClosure). A dated snapshot of Request counts by day, borough, agency, Problem and channel, built from `tableau/export.py` ([ADR 0002](docs/adr/0002-tableau-public-companion.md), [tableau/README.md](tableau/README.md)).
+
 ## Measured results (dev, 2026-10-25)
 
 - **Data:** 6,901,995 Current Requests created 2025-01-01 to 2026-10-24, from 8.08 million Observations; 0 quarantined. 248,752 open, of which 221,930 are Overdue.
