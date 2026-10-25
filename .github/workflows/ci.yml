@@ -51,12 +51,20 @@ jobs:
   docker-build:
     runs-on: ubuntu-latest
     strategy:
+      # One image's flaky pull should not cancel the others.
+      fail-fast: false
       matrix:
         image: [ingestion, monitoring, dashboard]
     steps:
       - uses: actions/checkout@v4
+      # Anonymous pulls from public.ecr.aws are rate-limited per runner IP (429): retry.
       - name: Build ${{ matrix.image }}
-        run: docker build -f ${{ matrix.image }}/Dockerfile -t nyc311-${{ matrix.image }}:ci .
+        run: |
+          for attempt in 1 2 3; do
+            docker build -f ${{ matrix.image }}/Dockerfile -t nyc311-${{ matrix.image }}:ci . && exit 0
+            echo "::warning::build attempt $attempt failed"; sleep $((attempt * 30))
+          done
+          exit 1
       - name: Dashboard answers its health check
         if: matrix.image == 'dashboard'
         run: |
