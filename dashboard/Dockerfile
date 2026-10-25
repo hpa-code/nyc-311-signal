@@ -4,7 +4,10 @@
 #   docker build --platform linux/arm64 -f dashboard/Dockerfile -t nyc311-dashboard .
 # Credentials come at run time from the Secrets Manager entry named by
 # NYC311_SNOWFLAKE_SECRET_NAME; nothing secret is in the image.
-FROM public.ecr.aws/docker/library/python:3.13-slim
+# The same official image from another registry when public.ecr.aws refuses
+# anonymous pulls (CI passes mirror.gcr.io/library/python:3.13-slim).
+ARG PYTHON_IMAGE=public.ecr.aws/docker/library/python:3.13-slim
+FROM ${PYTHON_IMAGE}
 
 COPY --from=ghcr.io/astral-sh/uv:0.13.5 /uv /usr/local/bin/uv
 WORKDIR /app

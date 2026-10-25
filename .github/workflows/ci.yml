@@ -57,11 +57,14 @@ jobs:
         image: [ingestion, monitoring, dashboard]
     steps:
       - uses: actions/checkout@v4
-      # Anonymous pulls from public.ecr.aws are rate-limited per runner IP (429): retry.
+      # public.ecr.aws refuses GitHub runners' anonymous pulls of the Python
+      # image ("data limit exceeded"): take it from Google's Docker Hub mirror,
+      # and retry what is left of transient pull errors.
       - name: Build ${{ matrix.image }}
         run: |
           for attempt in 1 2 3; do
-            docker build -f ${{ matrix.image }}/Dockerfile -t nyc311-${{ matrix.image }}:ci . && exit 0
+            docker build --build-arg PYTHON_IMAGE=mirror.gcr.io/library/python:3.13-slim \
+              -f ${{ matrix.image }}/Dockerfile -t nyc311-${{ matrix.image }}:ci . && exit 0
             echo "::warning::build attempt $attempt failed"; sleep $((attempt * 30))
           done
           exit 1

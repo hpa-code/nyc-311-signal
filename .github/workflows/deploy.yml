@@ -62,7 +62,9 @@ jobs:
         env:
           IMAGE: ${{ steps.ecr.outputs.registry }}/prod-nyc311-dashboard:${{ github.sha }}
         run: |
-          docker buildx build --platform linux/arm64 --provenance=false -f dashboard/Dockerfile -t "$IMAGE" --push .
+          docker buildx build --platform linux/arm64 --provenance=false \
+            --build-arg PYTHON_IMAGE=mirror.gcr.io/library/python:3.13-slim \
+            -f dashboard/Dockerfile -t "$IMAGE" --push .
           echo "image=$IMAGE" >> "$GITHUB_OUTPUT"
 
       - name: Apply Snowflake migrations (prod)
