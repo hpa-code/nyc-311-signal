@@ -158,3 +158,31 @@ def overdue_page(publication_id: str, f: GroupFilter, page: int, page_size: int)
         + " ORDER BY created_at_local, unique_key LIMIT %s OFFSET %s",
         (publication_id, *_group_params(f), page_size, page * page_size),
     )
+
+
+# Model evaluations are written by hand (`python -m ml.train`), not per
+# Publication: the latest is re-read with the status, each cached by version.
+@st.cache_data(ttl=STATUS_SECONDS)
+def latest_model_version() -> str | None:
+    row = _frame("SELECT MAX_BY(model_version, evaluated_at) AS model_version FROM APP.MODEL_EVALUATIONS")
+    value = row["model_version"].iloc[0]
+    return None if pd.isna(value) else str(value)
+
+
+@st.cache_data(max_entries=4)
+def model_evaluation(model_version: str) -> pd.Series:
+    return _frame("SELECT * FROM APP.MODEL_EVALUATIONS WHERE model_version = %s", (model_version,)).iloc[0]
+
+
+@st.cache_data(max_entries=4)
+def model_metrics(model_version: str) -> pd.DataFrame:
+    return _frame("SELECT * EXCLUDE model_version FROM APP.MODEL_METRICS WHERE model_version = %s", (model_version,))
+
+
+@st.cache_data(max_entries=2)
+def label_summary(publication_id: str) -> pd.DataFrame:
+    return _frame(
+        "SELECT agency, label, no_label_reason, requests, duplicate_closures"
+        " FROM APP.PUBLISHED_LABEL_SUMMARY WHERE publication_id = %s",
+        (publication_id,),
+    )

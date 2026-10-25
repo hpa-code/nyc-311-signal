@@ -23,15 +23,24 @@ dev = [
     "pandas-stubs>=3.0.5.260914",
     "pytest>=8",
 ]
+ml = [
+    "scikit-learn>=1.5",
+    "snowflake-connector-python[pandas]>=3.12",
+]
 
 [tool.uv]
 package = false
-default-groups = ["dev", "warehouse", "dashboard"]
+default-groups = ["dev", "warehouse", "dashboard", "ml"]
 
 [tool.pytest.ini_options]
-testpaths = ["ingestion/tests", "warehouse/tests"]
+testpaths = ["ingestion/tests", "warehouse/tests", "ml/tests"]
 pythonpath = ["."]
 
 [tool.mypy]
 python_version = "3.13"
-files = ["ingestion", "warehouse", "dashboard", "tableau"]
+files = ["ingestion", "warehouse", "dashboard", "tableau", "ml"]
+
+[[tool.mypy.overrides]]
+# scikit-learn ships no type information.
+module = ["sklearn.*"]
+ignore_missing_imports = true
