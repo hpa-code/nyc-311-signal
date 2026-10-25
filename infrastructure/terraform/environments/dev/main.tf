@@ -76,8 +76,8 @@ module "monitor" {
   alerts_topic_arn      = module.daily_collector.alerts_topic_arn
   snowflake_secret_arn  = module.core.snowflake_secret_arn
   snowflake_secret_name = module.core.snowflake_secret_name
-  # Commit the pushed monitor image was built from (README: Monitoring); null until then.
-  image_tag = null
+  # Commit the pushed monitor image was built from (README: Monitoring).
+  image_tag = "ce4aa14"
 }
 
 # Values from `DESC INTEGRATION NYC311_DEV_S3` (snowflake/setup_dev.sql).

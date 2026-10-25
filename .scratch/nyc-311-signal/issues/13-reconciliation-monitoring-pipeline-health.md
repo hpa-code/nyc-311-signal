@@ -57,3 +57,10 @@
   - The month rotation shifts as months are added, so a month can wait longer than the count of months.
   - Processing runtime isn't measured. Publication duration is on the page.
   - The concurrent cursor-and-pass case is untested; the watermark only counts cursor rows extracted before the pass.
+
+**2026-10-25 (agent): deployed to dev.**
+- `terraform apply` added the daily `dev-nyc311-collector-reconcile` schedule, the collector's new code, and the monitor repository and role.
+- Monitor image `ce4aa14` pushed. A second apply added the `dev-nyc311-monitor` Lambda, its hourly schedule and the alarms.
+- A manual invocation published 9 metrics under `NYC311/dev`.
+- V023: scoring coverage is measured on the latest published Publication that froze eligible Requests. Sweeps and rebuilds freeze none, and before V023 the signal then went missing. Dev: 7,004 of 7,004 scored, unknown-Problem rate 0.16%.
+- On its first evaluation `publication-stale` went to ALARM: no datapoint existed yet, and missing data counts as breaching. That sends one alert email; it clears on the next evaluation (9 h against 36 h). `reconciliation-stale` stays INSUFFICIENT_DATA until its first datapoint.
