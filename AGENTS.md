@@ -11,3 +11,7 @@ Default five canonical roles (`needs-triage`, `needs-info`, `ready-for-agent`, `
 ### Domain docs
 
 Single-context: one `GLOSSARY.md` + `docs/adr/` at repo root. See `docs/agents/domain.md`.
+
+### Coding standards
+
+Review rules (judgement calls) in `CODING_STANDARDS.md`. Mechanical checks run in `.githooks/pre-commit` and CI.

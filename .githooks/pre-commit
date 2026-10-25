@@ -1,0 +1,7 @@
+#!/bin/sh
+# Offline checks before every commit: types, and every test that needs no
+# Snowflake (including the applied-migration ledger). CI runs the same.
+# Enable once per clone: git config core.hooksPath .githooks
+set -e
+uv run mypy
+env -u SNOWFLAKE_ACCOUNT -u NYC311_SNOWFLAKE_SECRET_NAME uv run pytest -q -p no:warnings

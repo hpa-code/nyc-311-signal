@@ -1,7 +1,7 @@
 """Seam 2 harness: NYC311_DEV_TEST, rebuilt from the migrations each session.
 
-Needs Snowflake credentials, e.g. `uv run --env-file .env pytest warehouse`;
-skipped otherwise.
+Tests using the test database need Snowflake credentials, e.g.
+`uv run --env-file .env pytest warehouse`; they are skipped otherwise.
 """
 
 import pytest
@@ -20,7 +20,7 @@ def pytest_collection_modifyitems(config, items):
         return
     skip = pytest.mark.skip(reason="no Snowflake credentials (run with --env-file .env)")
     for item in items:
-        if "warehouse/tests" in str(item.fspath):
+        if {"test_env", "empty_db"} & set(getattr(item, "fixturenames", ())):
             item.add_marker(skip)
 
 

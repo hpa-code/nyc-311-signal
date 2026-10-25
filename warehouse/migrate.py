@@ -6,11 +6,16 @@ with its checksum. Editing an applied migration is refused: add a new one.
 Repeatable migrations (R__name.sql: procedures, tasks) run after them, again
 whenever their rendered text (including any included files) changes.
 
+Applying to the dev database also rewrites snowflake/migrations/CHECKSUMS, the
+ledger of applied versions that an offline test holds the files to, so an
+edit to an applied migration fails before it reaches any database.
+
     uv run --env-file .env python -m warehouse.migrate
 """
 
 import hashlib
 import sys
+from pathlib import Path
 
 from snowflake.connector import SnowflakeConnection
 
@@ -19,6 +24,11 @@ from warehouse.environment import DEV, Environment
 from warehouse.sql import SQL_ROOT, render
 
 MIGRATIONS = SQL_ROOT / "migrations"
+LEDGER = MIGRATIONS / "CHECKSUMS"
+LEDGER_HEADER = (
+    "# Versioned migrations applied to NYC311_DEV, with the sha256 they were applied with.\n"
+    "# Written by `python -m warehouse.migrate`; checked offline by warehouse/tests/test_migrations_frozen.py.\n"
+)
 
 
 class MigrationChanged(Exception):
@@ -46,7 +56,7 @@ def migrate(conn: SnowflakeConnection, env: Environment) -> list[str]:
     for path in paths:
         version, name = path.stem.split("__", 1)
         sql = path.read_text()
-        checksum = hashlib.sha256(sql.encode()).hexdigest()
+        checksum = file_checksum(path)
         if version in applied:
             if applied[version] != checksum:
                 raise MigrationChanged(f"{path.name} changed after it was applied; add a new migration instead")
@@ -73,10 +83,28 @@ def migrate(conn: SnowflakeConnection, env: Environment) -> list[str]:
     return newly_applied
 
 
+def file_checksum(path: Path) -> str:
+    return hashlib.sha256(path.read_text().encode()).hexdigest()
+
+
+def read_ledger() -> dict[str, str]:
+    """Version -> checksum of every versioned migration applied to dev."""
+    lines = (line.split() for line in LEDGER.read_text().splitlines() if line and not line.startswith("#"))
+    return {version: checksum for version, checksum in lines}
+
+
+def write_ledger(conn: SnowflakeConnection) -> None:
+    rows = conn.cursor().execute(
+        "SELECT version, checksum FROM OPS.SCHEMA_MIGRATIONS WHERE version LIKE 'V%' ORDER BY version"
+    ).fetchall()
+    LEDGER.write_text(LEDGER_HEADER + "".join(f"{version} {checksum}\n" for version, checksum in rows))
+
+
 def main() -> int:
     env = DEV
     with connect(env.pipeline_role, env.warehouse) as conn:
         applied = migrate(conn, env)
+        write_ledger(conn)
     print(f"{env.database}: applied {applied or 'nothing (up to date)'}")
     return 0
 
