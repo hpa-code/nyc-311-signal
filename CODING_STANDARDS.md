@@ -26,3 +26,11 @@ State that outlives a Publication (`ANALYTICS.DAILY_BACKLOG`, `ML.TRAINING_LABEL
 ## Migrations
 
 **Additive only.** A deploy applies pending migrations while the previous dashboard image still serves (`.github/workflows/deploy.yml`), and a Publication may be running. A migration may add tables, columns and views, or replace a view or procedure compatibly. It never drops or renames anything the deployed code still reads. To retire something, stop reading it in one release, then drop it in a later migration.
+
+## Alarms
+
+Every alarm email should be worth reading (`docs/runbook.md` has a row per alarm).
+
+- **ALARM only.** `alarm_actions` notify. Leave `ok_actions` unset: recoveries and first evaluations would page too.
+- **Persistence.** Datapoints must breach in at least 2 evaluation periods (`datapoints_to_alarm` ≥ 2), and the period matches how often the metric is published, so one late datapoint never pages.
+- **Missing data.** `notBreaching` unless silence is itself the failure (a monitor that stopped reporting). Then use `breaching`, still with 2 of 3, so the gap before the first datapoint, or before an hourly run, doesn't page.

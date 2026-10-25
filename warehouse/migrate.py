@@ -6,6 +6,10 @@ with its checksum. Editing an applied migration is refused: add a new one.
 Repeatable migrations (R__name.sql: procedures, tasks) run after them, again
 whenever their rendered text (including any included files) changes.
 
+Only committed migration files are applied (commit after /code-review):
+applying freezes a V migration, so a review fix would need another one.
+Iterate on NYC311_DEV_TEST, which the Seam 2 tests rebuild every session.
+
 Applying to the dev database also rewrites snowflake/migrations/CHECKSUMS, the
 ledger of applied versions that an offline test holds the files to, so an
 edit to an applied migration fails before it reaches any database.
@@ -15,6 +19,7 @@ edit to an applied migration fails before it reaches any database.
 """
 
 import hashlib
+import subprocess
 import sys
 from pathlib import Path
 
@@ -101,8 +106,30 @@ def write_ledger(conn: SnowflakeConnection) -> None:
     LEDGER.write_text(LEDGER_HEADER + "".join(f"{version} {checksum}\n" for version, checksum in rows))
 
 
+class UncommittedMigrations(Exception):
+    pass
+
+
+def uncommitted_migrations(directory: Path = MIGRATIONS) -> list[str]:
+    """Migration files that differ from the last commit (new, edited or
+    deleted), apart from the CHECKSUMS ledger this module writes."""
+    out = subprocess.run(
+        ["git", "status", "--porcelain", "--untracked-files=all", "--", "."],
+        cwd=directory, capture_output=True, text=True, check=True,
+    ).stdout
+    paths = [line[3:].strip() for line in out.splitlines()]
+    return sorted(p for p in paths if Path(p).name != LEDGER.name)
+
+
 def main() -> int:
     env = current()
+    # Applying a V migration freezes it (CHECKSUMS), so only reviewed, committed
+    # migrations reach a real database; iterate on NYC311_DEV_TEST, which the
+    # Seam 2 tests rebuild from the working tree.
+    if pending := uncommitted_migrations():
+        raise UncommittedMigrations(
+            f"commit these first (after /code-review); applying freezes them: {pending}"
+        )
     with connect(env.pipeline_role, env.warehouse) as conn:
         applied = migrate(conn, env)
         # The ledger records what dev has applied: the offline guard for edits.

@@ -33,7 +33,7 @@ package = false
 default-groups = ["dev", "warehouse", "dashboard", "ml"]
 
 [tool.pytest.ini_options]
-testpaths = ["ingestion/tests", "warehouse/tests", "ml/tests"]
+testpaths = ["ingestion/tests", "warehouse/tests", "ml/tests", "tests"]
 pythonpath = ["."]
 
 [tool.mypy]
