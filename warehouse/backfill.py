@@ -30,7 +30,7 @@ from ingestion.backfill import backfill_plan, month_windows, parse_month
 from ingestion.collector import Plan, RunLayout
 from ingestion.fetch_311 import app_token
 from warehouse.connection import connect
-from warehouse.environment import DEV
+from warehouse.environment import current
 from warehouse.pipeline import Stages, load_manifests, load_observations, process, publish
 
 
@@ -119,7 +119,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--through", required=True, type=parse_month, help="the backfill's last month, YYYY-MM")
     args = parser.parse_args(argv)
     plan = backfill_plan(args.through)
-    env = DEV
+    env = current()
     with connect(env.pipeline_role, env.warehouse, env.database) as conn:
         if args.action == "load":
             print(load(conn, plan))

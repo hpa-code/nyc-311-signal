@@ -15,7 +15,7 @@ from pathlib import Path
 from snowflake.connector import SnowflakeConnection
 
 from warehouse.connection import connect
-from warehouse.environment import DEV
+from warehouse.environment import current
 
 OUT = Path(__file__).resolve().parent / "out"
 # Both files come from one Publication, even if the pointer moves mid-export.
@@ -57,7 +57,7 @@ def export(conn: SnowflakeConnection, out: Path = OUT) -> dict[str, int]:
 
 
 def main() -> int:
-    env = DEV
+    env = current()
     with connect(env.dashboard_role, env.warehouse, env.database, statement_timeout_seconds=60) as conn:
         written = export(conn)
     for name, count in written.items():

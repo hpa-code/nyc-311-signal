@@ -20,6 +20,7 @@ page = st.navigation(
         st.Page("pages/overdue.py", title="Overdue Queue"),
         st.Page("pages/lookup.py", title="Request lookup"),
         st.Page("pages/model.py", title="Model Performance"),
+        st.Page("pages/health.py", title="Pipeline Health"),
     ]
 )
 page.run()

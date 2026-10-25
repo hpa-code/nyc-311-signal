@@ -37,6 +37,9 @@ _Avoid_: Latest record, master record
 **First Observed**:
 The moment the system first fetched any Observation of a Service Request; distinct from its creation time.
 
+**Reconciliation Pass**:
+The weekly re-fetch of older creation dates that finds changes the change cursor missed, and takes them in. Not to be confused with a collector run reconciling with its manifest.
+
 **Quarantined Observation**:
 An Observation rejected for failing data-quality rules, kept with its reason.
 _Avoid_: Bad record, error row

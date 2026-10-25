@@ -10,7 +10,8 @@ Applying to the dev database also rewrites snowflake/migrations/CHECKSUMS, the
 ledger of applied versions that an offline test holds the files to, so an
 edit to an applied migration fails before it reaches any database.
 
-    uv run --env-file .env python -m warehouse.migrate
+    uv run --env-file .env python -m warehouse.migrate                  # dev
+    NYC311_ENV=prod uv run --env-file .env python -m warehouse.migrate  # prod
 """
 
 import hashlib
@@ -20,7 +21,7 @@ from pathlib import Path
 from snowflake.connector import SnowflakeConnection
 
 from warehouse.connection import connect
-from warehouse.environment import DEV, Environment
+from warehouse.environment import DEV, Environment, current
 from warehouse.sql import SQL_ROOT, render
 
 MIGRATIONS = SQL_ROOT / "migrations"
@@ -101,10 +102,12 @@ def write_ledger(conn: SnowflakeConnection) -> None:
 
 
 def main() -> int:
-    env = DEV
+    env = current()
     with connect(env.pipeline_role, env.warehouse) as conn:
         applied = migrate(conn, env)
-        write_ledger(conn)
+        # The ledger records what dev has applied: the offline guard for edits.
+        if env == DEV:
+            write_ledger(conn)
     print(f"{env.database}: applied {applied or 'nothing (up to date)'}")
     return 0
 

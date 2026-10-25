@@ -18,7 +18,7 @@ from snowflake.connector import SnowflakeConnection
 
 from ml.features import FEATURE_VERSION
 from warehouse.connection import connect
-from warehouse.environment import DEV
+from warehouse.environment import current
 
 # Largest difference between a reference score from training and the
 # warehouse's score for the same features.
@@ -76,7 +76,7 @@ def main(argv: list[str]) -> int:
     if not argv:
         print(__doc__)
         return 2
-    env = DEV
+    env = current()
     with connect(env.pipeline_role, env.warehouse, env.database) as conn:
         promote(conn, argv[0], " ".join(argv[1:]) or None)
         print(f"{env.database}: approved model is now {approved_model(conn)}")

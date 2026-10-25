@@ -1,5 +1,6 @@
 """Names of one environment's Snowflake and S3 objects."""
 
+import os
 from dataclasses import dataclass, replace
 
 
@@ -46,3 +47,21 @@ DEV = Environment(
     pipeline_role="NYC311_DEV_PIPELINE",
     dashboard_role="NYC311_DEV_DASHBOARD",
 )
+
+PROD = Environment(
+    database="NYC311",
+    bucket="prod-nyc311-observations-778031418236",
+    storage_integration="NYC311_PROD_S3",
+    pipeline_role="NYC311_PROD_PIPELINE",
+    dashboard_role="NYC311_PROD_DASHBOARD",
+)
+
+
+def current() -> Environment:
+    """The environment named by NYC311_ENV (dev or prod; dev when unset), as
+    deployed code and the dashboard select it."""
+    name = os.environ.get("NYC311_ENV", "dev")
+    environments = {"dev": DEV, "prod": PROD}
+    if name not in environments:
+        raise ValueError(f"NYC311_ENV must be one of {sorted(environments)}, not {name!r}")
+    return environments[name]

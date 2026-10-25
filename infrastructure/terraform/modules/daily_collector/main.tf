@@ -1,6 +1,7 @@
 # Daily change-cursor collection: a Lambda running the collector, started by
-# EventBridge Scheduler at 06:00 UTC (explicit timezone), with CloudWatch
-# alarms to an SNS topic when an invocation fails or the daily run is missed.
+# EventBridge Scheduler at 06:00 UTC (explicit timezone), and daily for the
+# Reconciliation Pass, with CloudWatch alarms to an SNS topic when an
+# invocation fails or the daily run is missed.
 
 terraform {
   required_providers {
@@ -172,6 +173,31 @@ resource "aws_scheduler_schedule" "daily" {
     arn      = aws_lambda_function.collector.arn
     role_arn = aws_iam_role.scheduler.arn
     input    = jsonencode({})
+
+    retry_policy {
+      maximum_retry_attempts       = 3
+      maximum_event_age_in_seconds = 3600
+    }
+  }
+}
+
+# The Reconciliation Pass (ingestion/reconcile.py), daily at 08:00 UTC, after
+# the cursor pass: on Sundays it starts the week's pass, and on any day it
+# resumes one left unfinished (whose files would otherwise block processing).
+# Other days it does nothing. Its failures raise the same alarm.
+resource "aws_scheduler_schedule" "reconcile" {
+  name                         = "${local.name}-reconcile"
+  schedule_expression          = "cron(0 8 * * ? *)"
+  schedule_expression_timezone = "UTC"
+
+  flexible_time_window {
+    mode = "OFF"
+  }
+
+  target {
+    arn      = aws_lambda_function.collector.arn
+    role_arn = aws_iam_role.scheduler.arn
+    input    = jsonencode({ plan = "reconcile" })
 
     retry_policy {
       maximum_retry_attempts       = 3

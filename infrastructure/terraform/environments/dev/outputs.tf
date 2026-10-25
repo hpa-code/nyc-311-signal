@@ -45,3 +45,7 @@ output "backfill_task_definition" {
 output "backfill_network_configuration" {
   value = module.backfill.network_configuration
 }
+
+output "monitor_repository_url" {
+  value = module.monitor.repository_url
+}

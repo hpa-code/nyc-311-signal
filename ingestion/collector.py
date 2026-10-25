@@ -162,7 +162,7 @@ class Collector:
         manifest = self._stored_manifest(layout)
         if manifest is None:
             partitions = [self._collect_partition(layout, window, lease, stop_at) for window in plan.partitions]
-            manifest = self._write_manifest(layout, partitions)
+            manifest = self._write_manifest(layout, partitions, run_state.get("started_at"))
         if run_state["state"] != "complete":
             run_state["state"] = "complete"
             self._store.put(run_state_key(layout.run_id), _json_bytes(run_state))
@@ -177,9 +177,11 @@ class Collector:
             if state["partitions"] != partition_ids:
                 raise ValueError(f"run {plan.run_id} was started with partitions {state['partitions']}; use a new run ID")
             return state
+        now = self._clock()
         state = {
             "run_id": plan.run_id,
-            "extract_date": self._clock().date().isoformat(),
+            "extract_date": now.date().isoformat(),
+            "started_at": _iso(now),
             "partitions": partition_ids,
             "state": "in_progress",
         }
@@ -190,7 +192,7 @@ class Collector:
         stored = self._store.get(layout.manifest_key)
         return json.loads(stored) if stored is not None else None
 
-    def _write_manifest(self, layout: "RunLayout", partitions: list[dict]) -> dict:
+    def _write_manifest(self, layout: "RunLayout", partitions: list[dict], started_at: str | None) -> dict:
         files = [f for p in partitions for f in p["files"]]
         manifest = {
             "run_id": layout.run_id,
@@ -204,6 +206,7 @@ class Collector:
             "files": files,
             "file_count": len(files),
             "row_count": sum(f["rows"] for f in files),
+            "started_at": started_at,
             "completed_at": _iso(self._clock()),
         }
         if not self._store.put_if_absent(layout.manifest_key, _json_bytes(manifest)):

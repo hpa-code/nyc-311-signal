@@ -38,7 +38,7 @@ from ml.examples import GAP, SPLITS, SplitPlan, load_examples, snapshot_examples
 from ml.features import FEATURE_VERSION, FEATURES, MIN_LEVEL_REQUESTS, OTHER, CategoryMap
 from ml.metrics import best_f1_threshold, bootstrap_pr_auc, summarize
 from warehouse.connection import connect
-from warehouse.environment import DEV
+from warehouse.environment import current
 
 BASELINES = ("constant_prevalence", "historical_problem", "agency_only")
 CANDIDATES = ("logistic_regression", "gradient_boosting")
@@ -295,7 +295,7 @@ def _record(conn: SnowflakeConnection, version: str, label_cutoff: datetime, res
 
 
 def main() -> int:
-    env = DEV
+    env = current()
     with connect(env.pipeline_role, env.warehouse, env.database) as conn:
         version = evaluate(conn)
         cur = conn.cursor()

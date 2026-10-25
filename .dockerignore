@@ -1,5 +1,15 @@
-# The collector image needs only the lockfile and the ingestion package (without its tests).
+# Images take only what they run: the lockfile and the packages their
+# Dockerfiles copy (never tests, .env, notebooks or data).
 *
 !pyproject.toml
 !uv.lock
 !ingestion/*.py
+!warehouse/__init__.py
+!warehouse/connection.py
+!warehouse/environment.py
+!ml/__init__.py
+!ml/examples.py
+!ml/features.py
+!monitoring/*.py
+!dashboard/*.py
+!dashboard/pages/*.py

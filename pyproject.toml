@@ -38,7 +38,7 @@ pythonpath = ["."]
 
 [tool.mypy]
 python_version = "3.13"
-files = ["ingestion", "warehouse", "dashboard", "tableau", "ml"]
+files = ["ingestion", "warehouse", "dashboard", "tableau", "ml", "monitoring"]
 
 [[tool.mypy.overrides]]
 # scikit-learn ships no type information.

@@ -38,6 +38,22 @@ aws lambda invoke --region us-east-2 --function-name dev-nyc311-collector \
   --invocation-type Event --payload '{}' /dev/null
 ```
 
+A second schedule, `dev-nyc311-collector-reconcile`, invokes it daily at 08:00 UTC with `{"plan": "reconcile"}`. On Sundays that starts the week's Reconciliation Pass (`ingestion/reconcile.py`, run ID `reconcile-<year>W<week>`). On any day it resumes a pass left unfinished, because a pass's loaded files hold up processing until its manifest exists. Otherwise it does nothing. To run it by hand, pass that payload instead of `{}`.
+
+## Monitoring
+
+`modules/monitor` holds an hourly container-image Lambda, `dev-nyc311-monitor`, that reads `APP.MONITOR` as the read-only dashboard role (credentials from `dev/nyc311/snowflake-service-user`) and publishes metrics under the CloudWatch namespace `NYC311/dev`. Alarms on them notify the alerts topic; `docs/runbook.md` says what each means. Until `image_tag` is set, only its ECR repository exists. Build and push the image as for the backfill, then set `image_tag` in `environments/dev/main.tf` and apply:
+
+```sh
+TAG=$(git rev-parse --short HEAD)
+REPO=$(terraform -chdir=infrastructure/terraform/environments/dev output -raw monitor_repository_url)
+aws ecr get-login-password --region us-east-2 | docker login --username AWS --password-stdin "${REPO%%/*}"
+docker build --platform linux/arm64 --provenance=false -f monitoring/Dockerfile -t "${REPO}:${TAG}" .
+docker push "${REPO}:${TAG}"
+```
+
+Only alarmed signals go to CloudWatch, keeping within its 10 free custom metrics; run volumes are in `OPS.RUN_METRICS` and on the Pipeline Health page.
+
 ## Snowpipe notifications
 
 New objects under `data/daily/` (daily cursor passes) notify the Snowpipe `RAW.OBSERVATIONS_PIPE`. Slices and backfill write `data/bulk/`, which only bulk COPY (`python -m warehouse.pipeline`) loads, so no file is loaded by both. Its SQS queue ARN comes from `SHOW PIPES IN DATABASE NYC311_DEV` (`notification_channel`) and is set as `snowpipe_queue_arn` in `environments/dev/main.tf`. The queue is owned by Snowflake, one per Snowflake account, so a recreated pipe usually keeps the same ARN.

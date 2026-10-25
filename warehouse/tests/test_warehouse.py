@@ -82,6 +82,7 @@ def test_dashboard_role_reads_app_views_and_nothing_else(test_env):
             "PUBLISHED_DAILY_REQUEST_STATS", "PUBLISHED_BACKLOG_DAILY", "PUBLISHED_DURATION_STATS",
             "PUBLISHED_GEO_CELLS", "PUBLISHED_OVERDUE_QUEUE", "PUBLISHED_LABEL_SUMMARY", "MODEL_EVALUATIONS", "MODEL_METRICS",
             "PUBLISHED_RISK_QUEUE", "ADMISSION_SCORES", "REQUEST_LOOKUP",
+            "RUN_HEALTH", "MONITOR", "PUBLICATION_HISTORY", "PUBLISHED_QUARANTINE_SUMMARY",
         ):
             cur.execute(f"SELECT COUNT(*) FROM APP.{view}")
         for forbidden in (
@@ -103,6 +104,7 @@ def test_dashboard_role_reads_app_views_and_nothing_else(test_env):
             "SELECT COUNT(*) FROM ML.FEATURE_SNAPSHOTS",
             "SELECT COUNT(*) FROM ML.REQUEST_PREDICTIONS",
             "SELECT COUNT(*) FROM ANALYTICS.PUB_RISK_QUEUE",
+            "SELECT COUNT(*) FROM OPS.RUN_METRICS",
             "CREATE TABLE APP.SNEAKY (x INT)",
             "CREATE OR REPLACE VIEW APP.OVERVIEW_DAILY AS SELECT 1 AS x",
         ):

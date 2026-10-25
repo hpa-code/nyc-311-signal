@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from snowflake.connector import SnowflakeConnection
 
 from warehouse.connection import connect
-from warehouse.environment import DEV
+from warehouse.environment import current
 from warehouse.sql import read, render
 
 
@@ -130,7 +130,7 @@ def _copy(conn: SnowflakeConnection, sql: str) -> int:
 
 
 def main(argv: list[str]) -> int:
-    env = DEV
+    env = current()
     with connect(env.pipeline_role, env.warehouse, env.database) as conn:
         if "--ready" in argv:
             print(process_ready_runs(conn))

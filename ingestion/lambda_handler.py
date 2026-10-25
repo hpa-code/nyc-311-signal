@@ -1,8 +1,9 @@
-"""Daily collector Lambda: one change-cursor pass into the observation bucket.
+"""Collector Lambda: one change-cursor pass into the observation bucket, or,
+with the event {"plan": "reconcile"}, the Reconciliation Pass due today.
 
-EventBridge Scheduler invokes it once a day. A pass that cannot finish inside
-one invocation stops cleanly before the timeout and invokes the function again
-to resume it; the cursor advances only when the pass completes.
+EventBridge Scheduler invokes it daily for each. A pass that cannot finish
+inside one invocation stops cleanly before the timeout and invokes the
+function again to resume it; the cursor advances only when the pass completes.
 
 Environment:
     NYC311_BUCKET                 observation bucket
@@ -14,13 +15,14 @@ Environment:
 import json
 import os
 from collections.abc import Callable
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 
 from ingestion.api_client import SourceClient
-from ingestion.collector import Collector, CursorPlan, RunPaused, utc_now
+from ingestion.collector import Collector, CursorPlan, Plan, RunPaused, utc_now
 from ingestion.fetch_311 import REGION, app_token
 from ingestion.lease import LeaseHeld
-from ingestion.object_store import S3ObjectStore
+from ingestion.object_store import ObjectStore, S3ObjectStore
+from ingestion.reconcile import due_reconcile_plan
 
 # Stop starting new pages this long before the Lambda timeout: one page fetch
 # plus its file write must fit in it.
@@ -29,10 +31,17 @@ SAFETY_MARGIN = timedelta(seconds=150)
 MAX_CONTINUATIONS = 12
 
 
+def plan_for(event: dict, today: date, store: ObjectStore) -> Plan | CursorPlan | None:
+    """The cursor pass, or the Reconciliation Pass due today (None if none is)."""
+    if event.get("plan") == "reconcile":
+        return due_reconcile_plan(store, today)
+    return CursorPlan(initial_cursor=os.environ.get("NYC311_INITIAL_CURSOR") or None)
+
+
 def run_pass(
     event: dict,
     collector: Collector,
-    plan: CursorPlan,
+    plan: Plan | CursorPlan,
     stop_at: datetime,
     continue_later: Callable[[dict], None],
 ) -> dict:
@@ -45,7 +54,7 @@ def run_pass(
     except RunPaused as paused:
         if continuation >= MAX_CONTINUATIONS:
             raise RuntimeError(f"pass not finished after {continuation} continuations: {paused}") from paused
-        continue_later({"continuation": continuation + 1})
+        continue_later({**event, "continuation": continuation + 1})
         return {"outcome": "paused", "reason": str(paused), "continuation": continuation + 1}
     return {
         "outcome": "complete",
@@ -61,12 +70,16 @@ def handler(event: dict, context) -> dict:
 
     started = utc_now()
     stop_at = started + timedelta(milliseconds=context.get_remaining_time_in_millis()) - SAFETY_MARGIN
+    store = S3ObjectStore(boto3.client("s3", region_name=REGION), os.environ["NYC311_BUCKET"])
     collector = Collector(
         source=SourceClient(app_token=app_token()),
-        store=S3ObjectStore(boto3.client("s3", region_name=REGION), os.environ["NYC311_BUCKET"]),
+        store=store,
         page_size=int(os.environ.get("NYC311_PAGE_SIZE", "10000")),
     )
-    plan = CursorPlan(initial_cursor=os.environ.get("NYC311_INITIAL_CURSOR") or None)
+    plan = plan_for(event, started.date(), store)
+    if plan is None:
+        print(json.dumps({"outcome": "nothing due", "started_at": started.isoformat()}))
+        return {"outcome": "nothing due"}
 
     def continue_later(payload: dict) -> None:
         boto3.client("lambda", region_name=REGION).invoke(

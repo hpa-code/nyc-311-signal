@@ -12,9 +12,9 @@ import streamlit as st
 from snowflake.connector import SnowflakeConnection
 
 from warehouse.connection import connect
-from warehouse.environment import DEV
+from warehouse.environment import current
 
-ENV = DEV
+ENV = current()
 STATUS_SECONDS = 300
 
 
@@ -234,3 +234,28 @@ def admission_score(unique_key: str, publication_id: str) -> pd.DataFrame:
     """The Request's Admission Score with provenance (no rows if it has none);
     `publication_id` only keys the cache."""
     return _frame("SELECT * FROM APP.ADMISSION_SCORES WHERE unique_key = %s", (unique_key,))
+
+
+# Pipeline health is live operational state, not part of a Publication: a
+# held Publication or a stuck run must show here. Re-read with the status.
+@st.cache_data(ttl=STATUS_SECONDS)
+def monitor_signals() -> pd.Series:
+    return _frame("SELECT * FROM APP.MONITOR").iloc[0]
+
+
+@st.cache_data(ttl=STATUS_SECONDS)
+def recent_runs() -> pd.DataFrame:
+    return _frame("SELECT * FROM APP.RUN_HEALTH ORDER BY first_seen_at DESC, run_id DESC LIMIT 30")
+
+
+@st.cache_data(ttl=STATUS_SECONDS)
+def publication_history() -> pd.DataFrame:
+    return _frame("SELECT * FROM APP.PUBLICATION_HISTORY ORDER BY started_at DESC, publication_id DESC LIMIT 14")
+
+
+@st.cache_data(max_entries=2)
+def quarantine_summary(publication_id: str) -> pd.DataFrame:
+    return _frame(
+        "SELECT reason, observations FROM APP.PUBLISHED_QUARANTINE_SUMMARY WHERE publication_id = %s ORDER BY observations DESC",
+        (publication_id,),
+    )

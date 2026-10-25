@@ -29,3 +29,7 @@ output "socrata_secret_arn" {
 output "snowflake_secret_arn" {
   value = aws_secretsmanager_secret.snowflake_service_user.arn
 }
+
+output "snowflake_secret_name" {
+  value = aws_secretsmanager_secret.snowflake_service_user.name
+}

@@ -5,7 +5,9 @@
 --   2. Reconcile every waiting run, file by file, against RAW.
 --   3. Process pending Observations only if every pending file belongs to a
 --      reconciled run; otherwise wait and consume nothing.
---   4. Mark those runs consumed, in the same transaction as the processing.
+--   4. Mark those runs consumed and record what each did (OPS.RUN_METRICS,
+--      including the changes a reconciliation run found that the cursor
+--      missed), in the same transaction as the processing.
 --   5. Fail (after committing) if any run has waited more than 6 hours, or a
 --      pending file has had no reconciled run for 6 hours, so the task's
 --      failure surfaces a stuck pipeline instead of waiting silently.
@@ -124,6 +126,53 @@ BEGIN
       GROUP BY w.run_id
     ) AS c
     WHERE r.run_id = c.run_id AND ARRAY_CONTAINS(r.run_id::VARIANT, :ready_run_ids);
+
+    INSERT INTO OPS.RUN_METRICS
+    WITH runs AS (
+      SELECT run_id FROM OPS.PIPELINE_RUNS WHERE ARRAY_CONTAINS(run_id::VARIANT, :ready_run_ids)
+    ),
+    observed AS (
+      SELECT
+        w.run_id,
+        COUNT(DISTINCT n.unique_key)          AS distinct_requests,
+        COUNT_IF(ARRAY_SIZE(n.reasons) > 0)   AS quarantined_rows,
+        MAX(n.source_updated_at)              AS latest_source_updated_at,
+        MAX(n.extracted_at)                   AS extracted_at,
+        MIN(n.extracted_at)                   AS first_extracted_at
+      FROM CLEAN.WORK_NEW_OBSERVATIONS AS n
+      JOIN OPS.WORK_RUN_FILES AS w ON w.file_key = n.source_file
+      GROUP BY w.run_id
+    ),
+    -- The newest change any cursor run extracted before each run started.
+    watermarks AS (
+      SELECT o.run_id, MAX(c.source_updated_at) AS cursor_watermark
+      FROM observed AS o
+      JOIN RAW.RAW_311_OBSERVATIONS AS c ON c.run_id LIKE 'cursor-%' AND c.extracted_at < o.first_extracted_at
+      WHERE o.run_id LIKE 'reconcile-%'
+      GROUP BY o.run_id
+    ),
+    versions AS (
+      SELECT
+        v.valid_from_run_id                   AS run_id,
+        COUNT(DISTINCT v.unique_key)          AS updated_requests,
+        COUNT(DISTINCT IFF(v.valid_from_updated_at <= wm.cursor_watermark, v.unique_key, NULL)) AS missed_changes
+      FROM CLEAN.REQUEST_VERSIONS AS v
+      LEFT JOIN watermarks AS wm ON wm.run_id = v.valid_from_run_id
+      WHERE v.valid_from_run_id IN (SELECT run_id FROM runs)
+      GROUP BY v.valid_from_run_id
+    )
+    SELECT
+      r.run_id,
+      COALESCE(o.distinct_requests, 0),
+      COALESCE(v.updated_requests, 0),
+      COALESCE(o.quarantined_rows, 0),
+      o.latest_source_updated_at,
+      o.extracted_at,
+      IFF(r.run_id LIKE 'reconcile-%', COALESCE(v.missed_changes, 0), NULL),
+      CURRENT_TIMESTAMP()
+    FROM runs AS r
+    LEFT JOIN observed AS o ON o.run_id = r.run_id
+    LEFT JOIN versions AS v ON v.run_id = r.run_id;
 
     SELECT OBJECT_CONSTRUCT(
              'outcome', 'processed',
