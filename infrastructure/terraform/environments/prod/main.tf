@@ -151,9 +151,11 @@ module "dashboard" {
 module "ci_deploy" {
   source = "../../modules/ci_deploy"
 
-  environment        = "prod"
-  github_repository  = "hpa-code/nyc-311-signal"
-  ecr_repository_arn = module.dashboard.repository_arn
-  ecs_service_arn    = module.dashboard.service_arn
-  task_role_arns     = module.dashboard.task_role_arns
+  environment       = "prod"
+  github_repository = "hpa-code/nyc-311-signal"
+  # The repository uses GitHub's immutable OIDC subjects (owner and repo IDs).
+  github_subject_prefix = "repo:hpa-code@149611622/nyc-311-signal@1430188120"
+  ecr_repository_arn    = module.dashboard.repository_arn
+  ecs_service_arn       = module.dashboard.service_arn
+  task_role_arns        = module.dashboard.task_role_arns
 }

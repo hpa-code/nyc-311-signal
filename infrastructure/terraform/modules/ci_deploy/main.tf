@@ -22,6 +22,11 @@ variable "github_repository" {
   type        = string
 }
 
+variable "github_subject_prefix" {
+  description = "Start of the token's sub claim (GET /repos/{repo}/actions/oidc/customization/sub -> sub_claim_prefix). With immutable subjects it carries the owner and repository IDs: repo:owner@id/name@id."
+  type        = string
+}
+
 variable "ecr_repository_arn" {
   type = string
 }
@@ -75,7 +80,7 @@ data "aws_iam_policy_document" "assume" {
     condition {
       test     = "StringEquals"
       variable = "token.actions.githubusercontent.com:sub"
-      values   = ["repo:${var.github_repository}:environment:${var.environment}"]
+      values   = ["${var.github_subject_prefix}:environment:${var.environment}"]
     }
 
     # ...and only from the deploy workflow as it is on main, so a branch that
