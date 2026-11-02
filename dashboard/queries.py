@@ -10,6 +10,7 @@ from typing import NamedTuple
 import pandas as pd
 import streamlit as st
 from snowflake.connector import SnowflakeConnection
+from snowflake.connector.errors import ReauthenticationRequest
 
 from warehouse.connection import connect
 from warehouse.environment import current
@@ -24,7 +25,16 @@ def _connection() -> SnowflakeConnection:
 
 
 def _frame(sql: str, params: tuple = ()) -> pd.DataFrame:
-    cur = _connection().cursor()
+    try:
+        return _read(_connection(), sql, params)
+    except ReauthenticationRequest:
+        # The cached session expired after hours without use: log in again, once.
+        _connection.clear()
+        return _read(_connection(), sql, params)
+
+
+def _read(conn: SnowflakeConnection, sql: str, params: tuple) -> pd.DataFrame:
+    cur = conn.cursor()
     cur.execute(sql, params)
     frame = cur.fetch_pandas_all()
     frame.columns = [c.lower() for c in frame.columns]
