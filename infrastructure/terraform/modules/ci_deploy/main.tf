@@ -32,17 +32,26 @@ variable "ecs_service_arn" {
   default     = null
 }
 
+variable "github_oidc_provider_arn" {
+  description = "The account's GitHub OIDC provider, when another environment already created it; null creates it here."
+  type        = string
+  default     = null
+}
+
 variable "task_role_arns" {
   description = "The dashboard task's execution and task roles, which a new task definition names."
   type        = list(string)
 }
 
 locals {
-  name = "${var.environment}-nyc311-ci-deploy"
+  name              = "${var.environment}-nyc311-ci-deploy"
+  oidc_provider_arn = var.github_oidc_provider_arn != null ? var.github_oidc_provider_arn : aws_iam_openid_connect_provider.github[0].arn
 }
 
-# One per account; shared by any role trusting GitHub Actions.
+# One per account; shared by any role trusting GitHub Actions. The first
+# environment applied creates it, and the other passes its ARN in.
 resource "aws_iam_openid_connect_provider" "github" {
+  count          = var.github_oidc_provider_arn == null ? 1 : 0
   url            = "https://token.actions.githubusercontent.com"
   client_id_list = ["sts.amazonaws.com"]
 }
@@ -53,7 +62,7 @@ data "aws_iam_policy_document" "assume" {
 
     principals {
       type        = "Federated"
-      identifiers = [aws_iam_openid_connect_provider.github.arn]
+      identifiers = [local.oidc_provider_arn]
     }
 
     condition {
@@ -62,7 +71,7 @@ data "aws_iam_policy_document" "assume" {
       values   = ["sts.amazonaws.com"]
     }
 
-    # The deploy job runs in the GitHub environment "prod"...
+    # The deploy job runs in the GitHub environment named after this one...
     condition {
       test     = "StringEquals"
       variable = "token.actions.githubusercontent.com:sub"
@@ -138,4 +147,8 @@ resource "aws_iam_role_policy" "deploy" {
 
 output "role_arn" {
   value = aws_iam_role.deploy.arn
+}
+
+output "github_oidc_provider_arn" {
+  value = local.oidc_provider_arn
 }

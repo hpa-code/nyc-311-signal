@@ -61,3 +61,8 @@ output "dashboard_url" {
 output "dashboard_snowflake_secret_name" {
   value = module.dashboard.snowflake_secret_name
 }
+
+output "ci_deploy_role_arn" {
+  description = "Variable AWS_DEPLOY_ROLE_ARN of the GitHub environment dev."
+  value       = module.ci_deploy.role_arn
+}

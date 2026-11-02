@@ -11,13 +11,20 @@ name: Deploy
 # dashboard keeps working while they apply, and they apply only once the
 # image exists and before it starts.
 #
-# Configuration, all on the GitHub environment "prod" (Settings >
-# Environments), whose deployment branches are limited to main:
-#   variables  AWS_DEPLOY_ROLE_ARN  output ci_deploy_role_arn of environments/prod
-#              DASHBOARD_URL        output dashboard_url of environments/prod
-#   secrets    SNOWFLAKE_ACCOUNT, SNOWFLAKE_USER, SNOWFLAKE_PRIVATE_KEY of the
-#              prod service user (NYC311_PROD_SVC), never visible to PR runs
-# Until AWS_DEPLOY_ROLE_ARN is set, the job is skipped.
+# Configuration:
+#   repository variable  DEPLOY_ENV  the Terraform environment that serves the
+#                        public dashboard (dev until prod's pipeline runs, then
+#                        prod). It names the GitHub environment, the
+#                        <env>-nyc311-dashboard service and NYC311_ENV for
+#                        migrations. Until it is set, the job is skipped.
+#   on the GitHub environment of that name (Settings > Environments), whose
+#   deployment branches are limited to main:
+#     variables  AWS_DEPLOY_ROLE_ARN  output ci_deploy_role_arn of that environment
+#                DASHBOARD_URL        output dashboard_url of that environment
+#     secrets    SNOWFLAKE_ACCOUNT, SNOWFLAKE_USER, SNOWFLAKE_PRIVATE_KEY of that
+#                environment's service user, never visible to PR runs
+# The job's `if` can only read repository variables: environment variables
+# load once the job has entered its environment.
 
 on:
   push:
@@ -33,14 +40,14 @@ concurrency:
 
 env:
   AWS_REGION: us-east-2
-  SERVICE: prod-nyc311-dashboard
-  CLUSTER: prod-nyc311-dashboard
+  SERVICE: ${{ vars.DEPLOY_ENV }}-nyc311-dashboard
+  CLUSTER: ${{ vars.DEPLOY_ENV }}-nyc311-dashboard
 
 jobs:
   deploy:
-    if: vars.AWS_DEPLOY_ROLE_ARN != ''
+    if: vars.DEPLOY_ENV != ''
     runs-on: ubuntu-latest
-    environment: prod
+    environment: ${{ vars.DEPLOY_ENV }}
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6
@@ -60,16 +67,16 @@ jobs:
       - name: Build and push the dashboard image
         id: image
         env:
-          IMAGE: ${{ steps.ecr.outputs.registry }}/prod-nyc311-dashboard:${{ github.sha }}
+          IMAGE: ${{ steps.ecr.outputs.registry }}/${{ env.SERVICE }}:${{ github.sha }}
         run: |
           docker buildx build --platform linux/arm64 --provenance=false \
             --build-arg PYTHON_IMAGE=mirror.gcr.io/library/python:3.13-slim \
             -f dashboard/Dockerfile -t "$IMAGE" --push .
           echo "image=$IMAGE" >> "$GITHUB_OUTPUT"
 
-      - name: Apply Snowflake migrations (prod)
+      - name: Apply Snowflake migrations
         env:
-          NYC311_ENV: prod
+          NYC311_ENV: ${{ vars.DEPLOY_ENV }}
           SNOWFLAKE_ACCOUNT: ${{ secrets.SNOWFLAKE_ACCOUNT }}
           SNOWFLAKE_USER: ${{ secrets.SNOWFLAKE_USER }}
           SNOWFLAKE_PRIVATE_KEY: ${{ secrets.SNOWFLAKE_PRIVATE_KEY }}

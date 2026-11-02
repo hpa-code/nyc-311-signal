@@ -111,6 +111,7 @@ Logs are in CloudWatch under `/ecs/dev-nyc311-backfill`. Once the run's manifest
    - Create the environment `prod`, with deployment branches limited to `main`.
    - On it, set the variables `AWS_DEPLOY_ROLE_ARN` (output `ci_deploy_role_arn`) and `DASHBOARD_URL` (output `dashboard_url`).
    - On it, add the secrets `SNOWFLAKE_ACCOUNT`, `SNOWFLAKE_USER` (`NYC311_PROD_SVC`) and `SNOWFLAKE_PRIVATE_KEY`, the prod service user's key.
+   - Set the repository variable `DEPLOY_ENV` to `prod`. Until prod runs, it is `dev`: the dashboard and its deploy role live in `environments/dev`, deploying from the GitHub environment `dev` with the dev service user's key. Dev created the account's GitHub OIDC provider, so pass its ARN to prod's `ci_deploy` as `github_oidc_provider_arn`.
    - The repository-level secrets of the same names hold the dev service user's key. CI pull-request runs use those to run the warehouse tests against `NYC311_DEV_TEST`, so a pull request never sees a prod key.
 
    From then on, each merge to main runs `.github/workflows/deploy.yml`:

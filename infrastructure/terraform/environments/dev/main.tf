@@ -105,6 +105,19 @@ module "dashboard" {
   alerts_topic_arn = module.daily_collector.alerts_topic_arn
 }
 
+# Continuous deployment of the dashboard above (ticket 15), from the GitHub
+# environment "dev" (repository variable DEPLOY_ENV = dev). This creates the
+# account's GitHub OIDC provider; prod passes its ARN in when it takes over.
+module "ci_deploy" {
+  source = "../../modules/ci_deploy"
+
+  environment        = "dev"
+  github_repository  = "hpa-code/nyc-311-signal"
+  ecr_repository_arn = module.dashboard.repository_arn
+  ecs_service_arn    = module.dashboard.service_arn
+  task_role_arns     = module.dashboard.task_role_arns
+}
+
 # Account-wide guard: the AWS credits pay for usage until they run out or
 # expire, then the card does. Net cost (credits applied) above $1 in a month
 # means that has started. The monthly $10 budget from ticket 01 tracks gross
