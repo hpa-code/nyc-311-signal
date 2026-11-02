@@ -58,3 +58,15 @@ ALTER USER NYC311_SVC SET
   DEFAULT_ROLE = NYC311_DEV_PIPELINE
   DEFAULT_WAREHOUSE = NYC311_WH
   DEFAULT_SECONDARY_ROLES = ();
+
+-- The deployed dashboard's own user (ticket 14, on dev data until prod runs):
+-- only the dashboard role, so its key (dev/nyc311/snowflake-dashboard-user)
+-- can never write or read past the APP views. Set its public key from the
+-- key pair you generate for it:
+--   ALTER USER NYC311_DEV_DASHBOARD_SVC SET RSA_PUBLIC_KEY = '<public key body>';
+CREATE USER IF NOT EXISTS NYC311_DEV_DASHBOARD_SVC
+  TYPE = SERVICE
+  DEFAULT_ROLE = NYC311_DEV_DASHBOARD
+  DEFAULT_WAREHOUSE = NYC311_WH
+  DEFAULT_SECONDARY_ROLES = ();
+GRANT ROLE NYC311_DEV_DASHBOARD TO USER NYC311_DEV_DASHBOARD_SVC;

@@ -45,3 +45,16 @@
   4. Create the dashboard user's key.
   5. Buy the domain, set `dashboard_image_tag` and `domain_name`, apply, and add the DNS records.
 - **Then:** confirm the read-only role in prod (the role test runs against dev), and check that the health check passes and the public URL works.
+
+**2026-11-02 (agent, with the owner): HTTPS through CloudFront, paid from credits.** The owner chose the always-on plan (about $37–41 a month) and wants it paid from the AWS credits, with no domain to buy.
+- **No domain:** `modules/dashboard` now puts a CloudFront distribution in front of the load balancer. It serves HTTPS on its `*.cloudfront.net` name with the default certificate, which meets the TLS box without ACM. Nothing is cached. The viewer's Host is forwarded, so Streamlit's websocket and XSRF checks pass.
+- **Locked down:** the load balancer's security group accepts port 80 only from the managed prefix list `com.amazonaws.global.cloudfront.origin-facing`. The `domain_name` path (ACM on the load balancer) is unchanged.
+- **Credits guard:** `environments/prod` adds the budget `nyc311-credits-exhausted`: net cost after credits above $1 in a month emails `alert_email`. The account left the Free plan on 2026-10-23, so once the credits run out or expire the card pays, and nothing shuts down by itself. The owner should check the remaining credits and their expiry under Billing → Credits in the management account.
+- Checked: `terraform validate` (dev and prod), and a prod `terraform plan` with placeholder values. Nothing applied.
+
+**2026-11-02 (agent, with the owner): live on dev data.** To ship fast, `environments/dev` now runs `modules/dashboard` against `NYC311_DEV` (which has the backfill, the daily passes and the promoted model); prod's pipeline follows later.
+- URL: https://dfez4wdq6h0ab.cloudfront.net. Overview and Risk Queue load with data, and the websocket works through CloudFront.
+- Image `b907155` in `dev-nyc311-dashboard`. Snowflake user `NYC311_DEV_DASHBOARD_SVC` (only `NYC311_DEV_DASHBOARD`, block in `snowflake/setup_dev.sql`); its key is in `dev/nyc311/snowflake-dashboard-user`. A login test as that user confirmed the role and that writes are denied.
+- The `credits_exhausted` budget moved to `environments/dev`, which is applied.
+- The unhealthy alarm fired once at creation (missing data counts as breaching before the first target registers), then cleared.
+- Still open: the prod boxes, and ticket 15's `deploy.yml`, which targets `prod-` names.

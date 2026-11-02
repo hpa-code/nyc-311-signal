@@ -98,13 +98,13 @@ Logs are in CloudWatch under `/ecs/dev-nyc311-backfill`. Once the run's manifest
 1. **Snowflake.** Run `snowflake/setup_prod.sql` as ACCOUNTADMIN. Then apply the migrations: `NYC311_ENV=prod uv run --env-file .env python -m warehouse.migrate`. Copy `STORAGE_AWS_IAM_USER_ARN` and `STORAGE_AWS_EXTERNAL_ID` from `DESC INTEGRATION NYC311_PROD_S3`, and `notification_channel` from `SHOW PIPES IN DATABASE NYC311`, into `environments/prod/terraform.tfvars` with `initial_cursor`, `backfill_through`, `collector_image_tag` and `alert_email`.
 2. **AWS, without the dashboard.** `terraform plan` then `apply` in `environments/prod`. Then put the secret values (as in dev, under `prod/nyc311/…`), push the collector image, and run the backfill and the monitor as described above. Disable dev's daily schedule once prod's runs (instruction.md §13).
 3. **Dashboard user.** Generate a key pair for `NYC311_DASHBOARD` and set its public key (`setup_prod.sql`). Put `{"account","user","private_key"}` in `prod/nyc311/snowflake-dashboard-user`. This user holds only the dashboard role, so the deployed app cannot write or read past the APP views.
-4. **Dashboard.** This step costs money: about $37 per month for the load balancer, one 0.25 vCPU / 0.5 GB task and a public IPv4 (instruction.md §16).
+4. **Dashboard.** This step costs money: about $37–41 per month for the load balancer, one 0.25 vCPU / 0.5 GB task and the public IPv4 addresses (instruction.md §16). The account's AWS credits pay for it until they run out or expire. With `alert_email` set, the `nyc311-credits-exhausted` budget emails once a month's cost after credits passes $1, which means the card has started paying.
    - Build and push the image to `dashboard_repository_url` (as for the monitor, with `-f dashboard/Dockerfile`).
    - Set `dashboard_image_tag`, and `domain_name` if you have one, then apply.
-   - With a domain:
+   - Without a domain (the default): CloudFront serves HTTPS at `https://<id>.cloudfront.net` (output `dashboard_url`) with its default certificate, and the load balancer accepts HTTP only from CloudFront's addresses. Nothing is cached. CloudFront stays inside its always-free tier at this traffic. The first apply takes a few minutes while the distribution deploys.
+   - With a domain (bought separately, outside the credits):
      - add the `dashboard_certificate_validation_records` CNAMEs at its DNS host (the apply waits for them);
      - point the name at `dashboard_load_balancer_dns_name`.
-   - Without a domain: the dashboard is served over plain HTTP at the load balancer's own name.
    - The service only accepts traffic from the load balancer. Its health check is `/_stcore/health`, and the `prod-nyc311-dashboard-unhealthy` alarm watches it.
    - The load balancer sits in two subnets, the minimum, because each subnet adds a billed public IPv4 address. Expect about $41 a month rather than §16's $37.
 5. **Continuous deployment.** In the GitHub repository:
@@ -122,4 +122,4 @@ Logs are in CloudWatch under `/ecs/dev-nyc311-backfill`. Once the run's manifest
    - It never promotes models or runs backfills.
    - After the first apply, Terraform ignores the service's task definition, so CI owns image updates.
 
-To stop paying for the dashboard, set `dashboard_image_tag = null` and apply. This removes the load balancer, service and cluster, and keeps the image repository and the secret.
+To stop paying for the dashboard, set `dashboard_image_tag = null` and apply. This removes the load balancer, service, cluster and the CloudFront distribution, and keeps the image repository and the secret. The next start gets a new `*.cloudfront.net` name, so update `DASHBOARD_URL`.

@@ -84,7 +84,7 @@ variable "dashboard_image_tag" {
 }
 
 variable "domain_name" {
-  description = "Public name of the dashboard; null serves plain HTTP on the load balancer's name."
+  description = "Public name of the dashboard; null serves HTTPS on a CloudFront *.cloudfront.net name."
   type        = string
   default     = null
 }

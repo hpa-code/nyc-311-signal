@@ -49,3 +49,15 @@ output "backfill_network_configuration" {
 output "monitor_repository_url" {
   value = module.monitor.repository_url
 }
+
+output "dashboard_repository_url" {
+  value = module.dashboard.repository_url
+}
+
+output "dashboard_url" {
+  value = module.dashboard.url
+}
+
+output "dashboard_snowflake_secret_name" {
+  value = module.dashboard.snowflake_secret_name
+}

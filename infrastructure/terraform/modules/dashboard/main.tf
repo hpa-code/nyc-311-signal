@@ -9,7 +9,10 @@
 # balancer and task cost money (instruction.md §16), so starting them is a
 # deliberate apply. With domain_name set, the load balancer serves HTTPS with
 # an ACM certificate (validated through DNS records you add where the domain
-# is hosted) and redirects HTTP; without it, plain HTTP for a first check.
+# is hosted) and redirects HTTP. Without it, a CloudFront distribution serves
+# HTTPS on its own *.cloudfront.net name (default certificate, no domain to
+# buy, inside CloudFront's always-free tier) and the load balancer accepts
+# HTTP only from CloudFront.
 
 terraform {
   required_providers {
@@ -31,7 +34,7 @@ variable "image_tag" {
 }
 
 variable "domain_name" {
-  description = "Public name of the dashboard (e.g. nyc311.example.com); null serves plain HTTP."
+  description = "Public name of the dashboard (e.g. nyc311.example.com); null serves HTTPS through CloudFront's own name."
   type        = string
   default     = null
 }
@@ -44,7 +47,9 @@ locals {
   name    = "${var.environment}-nyc311-dashboard"
   enabled = var.image_tag != null
   https   = local.enabled && var.domain_name != null
-  port    = 8501
+  # No domain: CloudFront in front, for TLS without buying one.
+  cloudfront = local.enabled && var.domain_name == null
+  port       = 8501
 }
 
 data "aws_region" "current" {}
@@ -101,21 +106,25 @@ data "aws_subnets" "public" {
 resource "aws_security_group" "alb" {
   count       = local.enabled ? 1 : 0
   name        = "${local.name}-alb"
-  description = "Dashboard load balancer: HTTP and HTTPS from anywhere"
+  description = local.cloudfront ? "Dashboard load balancer: HTTP from CloudFront only" : "Dashboard load balancer: HTTP and HTTPS from anywhere"
   vpc_id      = data.aws_vpc.default.id
 
   ingress {
-    from_port   = 80
-    to_port     = 80
-    protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
+    from_port       = 80
+    to_port         = 80
+    protocol        = "tcp"
+    cidr_blocks     = local.cloudfront ? null : ["0.0.0.0/0"]
+    prefix_list_ids = local.cloudfront ? [data.aws_ec2_managed_prefix_list.cloudfront[0].id] : null
   }
 
-  ingress {
-    from_port   = 443
-    to_port     = 443
-    protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
+  dynamic "ingress" {
+    for_each = local.https ? [1] : []
+    content {
+      from_port   = 443
+      to_port     = 443
+      protocol    = "tcp"
+      cidr_blocks = ["0.0.0.0/0"]
+    }
   }
 
   egress {
@@ -239,6 +248,69 @@ resource "aws_lb_listener" "http" {
         status_code = "HTTP_301"
       }
     }
+  }
+}
+
+# ---------------------------------------------------------------------------
+# CloudFront (no domain): HTTPS on *.cloudfront.net, nothing cached
+# ---------------------------------------------------------------------------
+
+# CloudFront's origin-facing addresses. The list weighs about 55 rules
+# against the security group's quota of 60, so it stays the only rule there.
+data "aws_ec2_managed_prefix_list" "cloudfront" {
+  count = local.cloudfront ? 1 : 0
+  name  = "com.amazonaws.global.cloudfront.origin-facing"
+}
+
+data "aws_cloudfront_cache_policy" "disabled" {
+  count = local.cloudfront ? 1 : 0
+  name  = "Managed-CachingDisabled"
+}
+
+# Forwards the viewer's Host, cookies and query strings, so Streamlit's
+# websocket origin and XSRF checks see the cloudfront.net name the browser used.
+data "aws_cloudfront_origin_request_policy" "all_viewer" {
+  count = local.cloudfront ? 1 : 0
+  name  = "Managed-AllViewer"
+}
+
+resource "aws_cloudfront_distribution" "dashboard" {
+  count   = local.cloudfront ? 1 : 0
+  enabled = true
+  comment = local.name
+  # North America and Europe edges only; the always-free tier covers all classes.
+  price_class = "PriceClass_100"
+
+  origin {
+    origin_id   = "alb"
+    domain_name = aws_lb.dashboard[0].dns_name
+
+    custom_origin_config {
+      http_port              = 80
+      https_port             = 443
+      origin_protocol_policy = "http-only"
+      origin_ssl_protocols   = ["TLSv1.2"]
+    }
+  }
+
+  default_cache_behavior {
+    target_origin_id         = "alb"
+    viewer_protocol_policy   = "redirect-to-https"
+    allowed_methods          = ["GET", "HEAD", "OPTIONS", "PUT", "POST", "PATCH", "DELETE"]
+    cached_methods           = ["GET", "HEAD"]
+    cache_policy_id          = data.aws_cloudfront_cache_policy.disabled[0].id
+    origin_request_policy_id = data.aws_cloudfront_origin_request_policy.all_viewer[0].id
+    compress                 = true
+  }
+
+  restrictions {
+    geo_restriction {
+      restriction_type = "none"
+    }
+  }
+
+  viewer_certificate {
+    cloudfront_default_certificate = true
   }
 }
 
@@ -409,11 +481,11 @@ output "snowflake_secret_name" {
 }
 
 output "url" {
-  value = local.enabled ? (local.https ? "https://${var.domain_name}" : "http://${aws_lb.dashboard[0].dns_name}") : null
+  value = local.https ? "https://${var.domain_name}" : (local.cloudfront ? "https://${aws_cloudfront_distribution.dashboard[0].domain_name}" : null)
 }
 
 output "load_balancer_dns_name" {
-  description = "Point domain_name at this (CNAME, or an alias record)."
+  description = "With domain_name, point it at this (CNAME, or an alias record)."
   value       = local.enabled ? aws_lb.dashboard[0].dns_name : null
 }
 

@@ -97,4 +97,4 @@ One-time Snowflake setup is `snowflake/setup_dev.sql` (`setup_prod.sql` for prod
 - **NYPD is excluded from the model** ([ADR 0001](docs/adr/0001-exclude-nypd-from-modeling-cohort.md)), but is included in analytics and the Overdue Queue.
 - **Date-Only Closures** (most DOB Closures) are judged by calendar day; one on the horizon day has no Label.
 - **Associations, not causes.** Scores reflect reporting patterns and historical service differences. Within some agencies (DEP) the model ranks worse than chance.
-- **Not deployed yet.** The production environment, the public URL and continuous deployment are written and validated but not applied. Applying them needs a domain and spends money (about $41 a month).
+- **Not deployed yet.** The production environment, the public URL and continuous deployment are written and validated but not applied. Applying them spends about $41 a month, paid from the AWS account's credits; HTTPS comes from CloudFront, so no domain is needed.

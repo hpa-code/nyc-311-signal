@@ -92,3 +92,42 @@ module "snowflake_storage_access" {
   snowflake_iam_user_arn = "arn:aws:iam::870900716361:user/bsid2000-s"
   snowflake_external_id  = "XM00257_SFCRole=5_vLPqWT7BJQyVDUaMQLSWbMVrLoc="
 }
+
+# The public dashboard, on dev data until prod's pipeline runs (ticket 14):
+# dev already holds the backfill, the daily passes and the promoted model.
+# image_tag is the commit the pushed image was built from; null keeps the
+# load balancer, task and CloudFront off (and free).
+module "dashboard" {
+  source = "../../modules/dashboard"
+
+  environment      = "dev"
+  image_tag        = "b907155"
+  alerts_topic_arn = module.daily_collector.alerts_topic_arn
+}
+
+# Account-wide guard: the AWS credits pay for usage until they run out or
+# expire, then the card does. Net cost (credits applied) above $1 in a month
+# means that has started. The monthly $10 budget from ticket 01 tracks gross
+# spend instead, so it fires every month the dashboard runs. Budgets bill
+# from the third one on; this is the second.
+resource "aws_budgets_budget" "credits_exhausted" {
+  count        = var.alert_email != null ? 1 : 0
+  name         = "nyc311-credits-exhausted"
+  budget_type  = "COST"
+  limit_amount = "1"
+  limit_unit   = "USD"
+  time_unit    = "MONTHLY"
+
+  cost_types {
+    include_credit = true
+    include_refund = true
+  }
+
+  notification {
+    comparison_operator        = "GREATER_THAN"
+    threshold                  = 100
+    threshold_type             = "PERCENTAGE"
+    notification_type          = "ACTUAL"
+    subscriber_email_addresses = [var.alert_email]
+  }
+}
