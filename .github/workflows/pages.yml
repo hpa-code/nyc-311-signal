@@ -1,0 +1,35 @@
+name: Pages
+
+# Publishes pages/ (only) to GitHub Pages: hpa-code.github.io/nyc-311-signal,
+# a stable link that redirects to the live dashboard. The rest of the
+# repository, docs/ included, is not published.
+
+on:
+  push:
+    branches: [main]
+    paths: [pages/**, .github/workflows/pages.yml]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: pages
+      - id: deployment
+        uses: actions/deploy-pages@v4

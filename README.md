@@ -2,6 +2,8 @@
 
 An automated daily pipeline and dashboard over NYC 311 Service Requests (2025-01 onward, all agencies, unsampled). It collects every new and changed Request, keeps an exact history of how each one changed, publishes validated analytics daily, and gives each new Request a Delayed probability: the chance it is not Closed within seven days. The model is evaluated honestly against simple baselines.
 
+**Live dashboard:** [hpa-code.github.io/nyc-311-signal](https://hpa-code.github.io/nyc-311-signal/) (redirects to the CloudFront URL).
+
 Vocabulary (Service Request, Observation, Request Version, Label, Admission Score, Publication…) is defined in [GLOSSARY.md](GLOSSARY.md). The design and its reasoning are in [instruction.md](instruction.md), with decisions in [docs/adr/](docs/adr/).
 
 ![Overview](docs/screenshots/overview.jpg)
@@ -97,4 +99,4 @@ One-time Snowflake setup is `snowflake/setup_dev.sql` (`setup_prod.sql` for prod
 - **NYPD is excluded from the model** ([ADR 0001](docs/adr/0001-exclude-nypd-from-modeling-cohort.md)), but is included in analytics and the Overdue Queue.
 - **Date-Only Closures** (most DOB Closures) are judged by calendar day; one on the horizon day has no Label.
 - **Associations, not causes.** Scores reflect reporting patterns and historical service differences. Within some agencies (DEP) the model ranks worse than chance.
-- **Not deployed yet.** The production environment, the public URL and continuous deployment are written and validated but not applied. Applying them spends about $41 a month, paid from the AWS account's credits; HTTPS comes from CloudFront, so no domain is needed.
+- **The public dashboard runs on dev data.** It is served from `environments/dev` (`NYC311_DEV`) and redeployed on each merge to main. The production environment is written and validated but not applied yet. Hosting costs about $41 a month, paid from the AWS account's credits; HTTPS comes from CloudFront, so no domain is needed.
